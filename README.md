@@ -1,4 +1,4 @@
-![enter image description here](https://img001.prntscr.com/file/img001/RlIHr_cPQuC8wuqoBytLDw.png)
+![Screenshot of CSFloat Helper](screenshot/Screenshot_main.png)
 ## Installation
 
 ### Requirements
@@ -40,6 +40,7 @@ If you prefer to use a bat file for quick launch on Windows, you can use the run
 
 ## Features
 
+![Screenshot of CSFloat Helper](screenshot/Screenshot_user_info.png)
 ### User Interface
 
 -   **Graphical Interface**: The application provides a user-friendly graphical interface for managing the CSFloat inventory.
