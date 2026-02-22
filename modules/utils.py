@@ -3,10 +3,11 @@ import json
 import urllib.request
 import urllib.error
 import hashlib
+import logging
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 import threading
-from PyQt6.QtCore import QMetaObject, Qt, Q_ARG, QObject, pyqtSlot
+from PyQt6.QtCore import QMetaObject, Qt, Q_ARG, QObject, QSettings, pyqtSlot
 
 CACHE_DIR = "cache"
 os.makedirs(CACHE_DIR, exist_ok=True)
@@ -44,6 +45,46 @@ def load_config():
     except FileNotFoundError:
         print("Config file not found!")
         return None
+
+
+def key_id(api_key: str) -> str:
+    """Короткий идентификатор ключа для QSettings (без утечки ключа в реестр)."""
+    return hashlib.sha256(api_key.encode()).hexdigest()[:16]
+
+
+def migrate_settings(api_keys: list):
+    """Миграция настроек: старые ключи реестра (с plaintext API key) → новые (с хешем).
+
+    Читает старые записи вида account_{api_key}_*, записывает как account_{key_id}_*,
+    удаляет старые. Также мигрирует default_api_key.
+    """
+    settings = QSettings("MyCompany", "SteamInventoryApp")
+    migrated = False
+
+    for api_key in api_keys:
+        kid = key_id(api_key)
+        suffixes = ["_keep_online", "_description"]
+
+        for suffix in suffixes:
+            old_key = f"account_{api_key}{suffix}"
+            new_key = f"account_{kid}{suffix}"
+
+            if settings.contains(old_key):
+                value = settings.value(old_key)
+                if not settings.contains(new_key):
+                    settings.setValue(new_key, value)
+                settings.remove(old_key)
+                migrated = True
+
+    # default_api_key: если хранится сам ключ — заменить на хеш
+    saved_default = settings.value("default_api_key", "")
+    if saved_default and saved_default in api_keys:
+        settings.setValue("default_api_key", key_id(saved_default))
+        migrated = True
+
+    if migrated:
+        settings.sync()
+        logging.info("Settings migrated: API keys removed from registry")
 
 
 def get_image_extension(url: str, content_type: str = None) -> str:

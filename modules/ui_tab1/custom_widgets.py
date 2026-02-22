@@ -8,6 +8,7 @@ from PyQt6.QtCore import Qt, QPoint, pyqtSignal
 from PyQt6.QtGui import QCursor, QFont
 
 from modules.theme import Theme
+from modules.utils import key_id
 
 
 class CustomToolTip(QFrame):
@@ -84,10 +85,10 @@ class AccountSettingsDialog(QDialog):
         self.setModal(True)
 
         self.current_keep_online = self.settings.value(
-            f"account/{api_key}/keep_online", False, type=bool
+            f"account_{key_id(api_key)}_keep_online", False, type=bool
         )
         self.current_description = self.settings.value(
-            f"account/{api_key}/description", "", type=str
+            f"account_{key_id(api_key)}_description", "", type=str
         )
 
         self._init_ui()
@@ -181,8 +182,8 @@ class AccountSettingsDialog(QDialog):
         keep_online = self.keep_online_switch.isChecked()
         description = self.description_input.text()
 
-        self.settings.setValue(f"account/{self.api_key}/keep_online", keep_online)
-        self.settings.setValue(f"account/{self.api_key}/description", description)
+        self.settings.setValue(f"account_{key_id(self.api_key)}_keep_online", keep_online)
+        self.settings.setValue(f"account_{key_id(self.api_key)}_description", description)
 
         self.settings.sync()
 

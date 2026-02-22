@@ -92,6 +92,9 @@ class SteamInventoryApp(QMainWindow):
         self.tab1.load_data(self.threadpool)
 
     def closeEvent(self, event):
+        # Останавливаем фоновые потоки
+        self.tab1.cleanup()
+
         # Сохраняем настройки перед закрытием
         self.tab1.save_column_widths()
 

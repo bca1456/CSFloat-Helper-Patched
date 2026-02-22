@@ -1,6 +1,6 @@
 # modules/workers.py
 
-from PyQt6.QtCore import QObject, pyqtSignal, QRunnable, pyqtSlot, QThread
+from PyQt6.QtCore import QObject, pyqtSignal, QRunnable, pyqtSlot, QThread, QMutex
 
 import traceback
 import time
@@ -45,23 +45,30 @@ class KeepOnlineWorker(QThread):
 
     def __init__(self):
         super().__init__()
-        self.api_keys = []
+        self._api_keys = []
+        self._mutex = QMutex()
         self._running = True
         self.interval = 20
 
     def set_api_keys(self, keys: list):
         """Установить список активных API-ключей."""
-        self.api_keys = keys.copy()
+        self._mutex.lock()
+        self._api_keys = keys.copy()
+        self._mutex.unlock()
 
     def add_api_key(self, api_key: str):
         """Добавить API-ключ в список."""
-        if api_key not in self.api_keys:
-            self.api_keys.append(api_key)
+        self._mutex.lock()
+        if api_key not in self._api_keys:
+            self._api_keys.append(api_key)
+        self._mutex.unlock()
 
     def remove_api_key(self, api_key: str):
         """Удалить API-ключ из списка."""
-        if api_key in self.api_keys:
-            self.api_keys.remove(api_key)
+        self._mutex.lock()
+        if api_key in self._api_keys:
+            self._api_keys.remove(api_key)
+        self._mutex.unlock()
 
     def stop(self):
         """Остановить worker."""
@@ -70,7 +77,13 @@ class KeepOnlineWorker(QThread):
     def run(self):
         """Главный цикл - пингуем все активные ключи каждые 20 секунд."""
         while self._running:
-            for api_key in self.api_keys.copy():
+            self._mutex.lock()
+            keys_snapshot = self._api_keys.copy()
+            self._mutex.unlock()
+
+            for api_key in keys_snapshot:
+                if not self._running:
+                    break
                 try:
                     user = get_user_info(api_key)
                     if user is None:

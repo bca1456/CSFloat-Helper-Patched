@@ -9,6 +9,7 @@ from PyQt6.QtCore import Qt, QSettings, pyqtSignal, pyqtSlot, QEvent, QThreadPoo
 from modules.api import get_user_info, get_inventory_data, get_stall_data, get_schema
 from modules.workers import ApiWorker, KeepOnlineWorker
 from modules.collections_manager import update_collections_from_schema, get_collections
+from modules.utils import key_id, migrate_settings
 from .constants import refresh_collections
 from modules.models.columns import (
     COL_NAME, COL_STICKERS, COL_KEYCHAINS, COL_FLOAT, COL_SEED,
@@ -37,13 +38,20 @@ class Tab1(QWidget):
         self.api_keys = api_keys
         self.icon_path = icon_path
         self.settings = QSettings("MyCompany", "SteamInventoryApp")
-        self.default_api_key = self.settings.value("default_api_key", api_keys[0])
+
+        migrate_settings(api_keys)
+
+        saved_id = self.settings.value("default_api_key", "")
+        self.default_api_key = next(
+            (k for k in api_keys if key_id(k) == saved_id),
+            api_keys[0],
+        )
 
         self.store = InventoryStore(api_keys, parent=self)
         self.filter_ctrl = FilterController(parent=self)
 
         for api_key in self.api_keys:
-            desc = self.settings.value(f"account_{api_key}_description", "", type=str)
+            desc = self.settings.value(f"account_{key_id(api_key)}_description", "", type=str)
             self.store.account_descriptions[api_key] = desc
 
         self.price_sort_order = Qt.SortOrder.AscendingOrder
@@ -66,7 +74,7 @@ class Tab1(QWidget):
 
         active_keys = []
         for api_key in self.api_keys:
-            if self.settings.value(f"account_{api_key}_keep_online", False, type=bool):
+            if self.settings.value(f"account_{key_id(api_key)}_keep_online", False, type=bool):
                 active_keys.append(api_key)
 
         if active_keys:
@@ -86,8 +94,8 @@ class Tab1(QWidget):
     def on_settings_saved(self, api_key: str, keep_online: bool, description: str):
         """Handle account settings saved."""
         self.store.account_descriptions[api_key] = description
-        self.settings.setValue(f"account_{api_key}_keep_online", keep_online)
-        self.settings.setValue(f"account_{api_key}_description", description)
+        self.settings.setValue(f"account_{key_id(api_key)}_keep_online", keep_online)
+        self.settings.setValue(f"account_{key_id(api_key)}_description", description)
         self.settings.sync()
 
         if keep_online:
@@ -144,6 +152,7 @@ class Tab1(QWidget):
             self.font(), self, self.apply_filters,
         )
         self.ops.bind_price_input(self.price_input)
+        self.ops.bind_action_buttons(self.action_buttons)
 
         self.filter_ctrl.bind(self.inventory_table, {
             "name_filter": self.name_filter,
@@ -400,11 +409,8 @@ class Tab1(QWidget):
         for i in range(self.inventory_table.columnCount()):
             self.settings.setValue(f"tab1_column_width_{i}", self.inventory_table.columnWidth(i))
 
-    def closeEvent(self, event):
-        self.save_column_widths()
-
+    def cleanup(self):
+        """Останавливает фоновые потоки. Вызывается из SteamInventoryApp.closeEvent."""
         if self.keep_online_worker and self.keep_online_worker.isRunning():
             self.keep_online_worker.stop()
             self.keep_online_worker.wait(3000)
-
-        event.accept()

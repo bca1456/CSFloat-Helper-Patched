@@ -9,9 +9,10 @@ from PyQt6.QtWidgets import (
     QVBoxLayout, QFormLayout, QPushButton, QScrollArea, QGraphicsDropShadowEffect
 )
 from PyQt6.QtGui import QPixmap, QFont, QIcon, QColor, QPainter, QPainterPath
-from PyQt6.QtCore import Qt, QPersistentModelIndex, QRectF
+from PyQt6.QtCore import Qt, QPersistentModelIndex, QRectF, QThreadPool
 
 from modules.api import bulk_list, bulk_delist, bulk_modify
+from modules.workers import ApiWorker
 from modules.utils import cache_image
 from modules.messagebox import warning, information
 from modules.theme import Theme
@@ -34,9 +35,20 @@ class ItemOperations:
         self.parent_widget = parent_widget
         self.apply_filters_fn = apply_filters_fn
         self.price_input = None
+        self.action_buttons = {}
+        self.threadpool = QThreadPool.globalInstance()
 
     def bind_price_input(self, price_input):
         self.price_input = price_input
+
+    def bind_action_buttons(self, buttons):
+        """Привязывает кнопки действий для блокировки во время операций."""
+        self.action_buttons = buttons
+
+    def _set_buttons_enabled(self, enabled):
+        """Блокирует/разблокирует кнопки действий."""
+        for btn in self.action_buttons.values():
+            btn.setEnabled(enabled)
 
     # =========================================================================
     # Диалоги
@@ -339,12 +351,13 @@ class ItemOperations:
         if not self._show_confirmation_dialog("Sell Items", grouped, "sell"):
             return
 
-        successful = []
+        # Подготовка данных для фонового потока
+        descriptions = dict(self.store.account_descriptions)
 
-        for api_key, items in items_to_sell.items():
-            try:
-                description = self.store.account_descriptions.get(api_key, "")
-
+        def _do_sell():
+            results = {}
+            for api_key, items in items_to_sell.items():
+                description = descriptions.get(api_key, "")
                 bulk_items = []
                 for item in items:
                     item_data = {
@@ -352,35 +365,45 @@ class ItemOperations:
                         "price": item["price"],
                         "type": "buy_now"
                     }
-
                     if description:
                         item_data["description"] = description
-
                     bulk_items.append(item_data)
 
                 resp = bulk_list(api_key, bulk_items)
+                results[api_key] = (items, resp)
+            return results
 
-                if resp is None:
-                    warning(pw, "Error", "Failed to list items. No response from server.")
-                    return
+        self._set_buttons_enabled(False)
 
-                listings = resp.get("data", []) if isinstance(resp, dict) else resp
-                if not listings:
-                    warning(pw, "Error", "Failed to list items. Empty response from server.")
-                    return
+        worker = ApiWorker(_do_sell)
+        worker.signals.result.connect(lambda res: self._on_sell_result(res, already_listed))
+        worker.signals.error.connect(self._on_sell_error)
+        worker.signals.finished.connect(lambda: self._set_buttons_enabled(True))
+        self.threadpool.start(worker)
 
-                for i, listing in enumerate(listings):
-                    if i >= len(items):
-                        break
-                    item = items[i]
-                    listing_id = listing.get("id", "")
-                    if listing_id:
-                        successful.append((item["name"], item["price"] / 100))
-                        self._update_item_as_sold(item["asset_id"], item["price"], listing_id)
+    def _on_sell_result(self, results, already_listed):
+        """Обработка результата продажи."""
+        pw = self.parent_widget
+        successful = []
 
-            except Exception as e:
-                warning(pw, "Error", f"Failed to list items: {str(e)}")
+        for api_key, (items, resp) in results.items():
+            if resp is None:
+                warning(pw, "Error", "Failed to list items. No response from server.")
                 return
+
+            listings = resp.get("data", []) if isinstance(resp, dict) else resp
+            if not listings:
+                warning(pw, "Error", "Failed to list items. Empty response from server.")
+                return
+
+            for i, listing in enumerate(listings):
+                if i >= len(items):
+                    break
+                item = items[i]
+                listing_id = listing.get("id", "")
+                if listing_id:
+                    successful.append((item["name"], item["price"] / 100))
+                    self._update_item_as_sold(item["asset_id"], item["price"], listing_id)
 
         if successful:
             self.apply_filters_fn()
@@ -390,6 +413,11 @@ class ItemOperations:
         if already_listed:
             warning(pw, "Warning",
                     "The following items are already listed:\n" + "\n".join(already_listed))
+
+    def _on_sell_error(self, error):
+        """Обработка ошибки продажи."""
+        e, tb = error
+        warning(self.parent_widget, "Error", f"Failed to list items: {str(e)}")
 
     def change_item_price(self):
         """Изменяет цену выбранных предметов."""
@@ -475,43 +503,58 @@ class ItemOperations:
         if not self._show_confirmation_dialog("Change Price", grouped, "change"):
             return
 
-        successful = []
-
-        for api_key, items in items_to_change.items():
-            try:
+        def _do_change_price():
+            results = {}
+            for api_key, items in items_to_change.items():
                 modifications = [
                     {"contract_id": item["contract_id"], "price": int(item["new_price"] * 100)}
                     for item in items
                 ]
-
                 resp = bulk_modify(api_key, modifications)
+                results[api_key] = (items, resp)
+            return results
 
-                if resp is None:
-                    warning(pw, "Error", "Failed to change prices. No response from server.")
-                    return
+        self._set_buttons_enabled(False)
 
-                listings = resp.get("data", []) if isinstance(resp, dict) else []
-                if not listings:
-                    warning(pw, "Error", "Failed to change prices. Empty response from server.")
-                    return
+        worker = ApiWorker(_do_change_price)
+        worker.signals.result.connect(self._on_change_price_result)
+        worker.signals.error.connect(self._on_change_price_error)
+        worker.signals.finished.connect(lambda: self._set_buttons_enabled(True))
+        self.threadpool.start(worker)
 
-                listing_map = {listing.get("id"): listing for listing in listings}
+    def _on_change_price_result(self, results):
+        """Обработка результата изменения цен."""
+        pw = self.parent_widget
+        successful = []
 
-                for item in items:
-                    contract_id = item["contract_id"]
-                    if contract_id in listing_map:
-                        successful.append((item["name"], item["current_price"], item["new_price"]))
-                        self._update_item_price(item["asset_id"], int(item["new_price"] * 100))
-
-            except Exception as e:
-                warning(pw, "Error", f"Failed to change prices: {str(e)}")
+        for api_key, (items, resp) in results.items():
+            if resp is None:
+                warning(pw, "Error", "Failed to change prices. No response from server.")
                 return
+
+            listings = resp.get("data", []) if isinstance(resp, dict) else []
+            if not listings:
+                warning(pw, "Error", "Failed to change prices. Empty response from server.")
+                return
+
+            listing_map = {listing.get("id"): listing for listing in listings}
+
+            for item in items:
+                contract_id = item["contract_id"]
+                if contract_id in listing_map:
+                    successful.append((item["name"], item["current_price"], item["new_price"]))
+                    self._update_item_price(item["asset_id"], int(item["new_price"] * 100))
 
         if successful:
             self._show_price_change_operations(successful)
             self.table.clearSelection()
         else:
             warning(pw, "Warning", "No prices were changed.")
+
+    def _on_change_price_error(self, error):
+        """Обработка ошибки изменения цен."""
+        e, tb = error
+        warning(self.parent_widget, "Error", f"Failed to change prices: {str(e)}")
 
     def _calculate_new_price(self, price_input, current_price):
         """Вычисляет новую цену."""
@@ -602,6 +645,7 @@ class ItemOperations:
 
             items_to_delist[api_it.text()].append({
                 "persistent": persistent,
+                "asset_id": self.table.item(row, COL_ASSET_ID).text(),
                 "contract_id": listing_id_it.text(),
                 "name": self.table.item(row, COL_NAME).text(),
             })
@@ -618,30 +662,49 @@ class ItemOperations:
         if not self._show_confirmation_dialog("Delist Items", grouped, "delist"):
             return
 
+        # Собираем данные для фонового потока (без QPersistentModelIndex)
+        delist_api_data = {}
+        for api_key, items in items_to_delist.items():
+            delist_api_data[api_key] = [item["contract_id"] for item in items]
+
+        def _do_delist():
+            results = {}
+            for api_key, contract_ids in delist_api_data.items():
+                resp = bulk_delist(api_key, contract_ids)
+                results[api_key] = resp
+            return results
+
+        self._set_buttons_enabled(False)
+
+        worker = ApiWorker(_do_delist)
+        worker.signals.result.connect(lambda res: self._on_delist_result(res, items_to_delist))
+        worker.signals.error.connect(self._on_delist_error)
+        worker.signals.finished.connect(lambda: self._set_buttons_enabled(True))
+        self.threadpool.start(worker)
+
+    def _on_delist_result(self, results, items_to_delist):
+        """Обработка результата снятия с продажи."""
         self.table.setSortingEnabled(False)
         delisted = []
 
-        for api_key, items in items_to_delist.items():
-            try:
-                contract_ids = [item["contract_id"] for item in items]
-                resp = bulk_delist(api_key, contract_ids)
-
-                if resp:
-                    for item in items:
-                        row = item["persistent"].row()
+        for api_key, resp in results.items():
+            if resp:
+                for item in items_to_delist[api_key]:
+                    row = self._find_row_by_asset_id(item["asset_id"])
+                    if row != -1:
                         delisted.append(item["name"])
                         self._update_item_as_unsold(row)
-
-            except Exception as e:
-                warning(pw, "Error", f"Failed to delist items: {str(e)}")
-                self.table.setSortingEnabled(True)
-                return
 
         self.table.setSortingEnabled(True)
 
         if delisted:
             self._show_grouped_delist(delisted)
             self.table.clearSelection()
+
+    def _on_delist_error(self, error):
+        """Обработка ошибки снятия с продажи."""
+        e, tb = error
+        warning(self.parent_widget, "Error", f"Failed to delist items: {str(e)}")
 
     def swap_items(self):
         """Перевыставляет предметы."""
@@ -711,27 +774,20 @@ class ItemOperations:
         if not self._show_confirmation_dialog("Relist Items", grouped, "swap"):
             return
 
-        self.table.setSortingEnabled(False)
+        descriptions = dict(self.store.account_descriptions)
 
-        try:
-            # Снимаем с продажи
+        def _do_swap():
+            # Фаза 1: снимаем с продажи
             for apikey, items in to_swap.items():
                 contract_ids = [it["contract_id"] for it in items]
                 resp = bulk_delist(apikey, contract_ids)
-
                 if not resp:
-                    warning(pw, "Error", "Failed to delist items.")
-                    return
+                    raise RuntimeError("Failed to delist items.")
 
-                for it in items:
-                    self._update_item_as_unsold_by_asset_id(it["asset_id"])
-
-            # Выставляем заново
-            successful = []
-
+            # Фаза 2: выставляем заново
+            results = {}
             for apikey, items in to_swap.items():
-                description = self.store.account_descriptions.get(apikey, "")
-
+                description = descriptions.get(apikey, "")
                 bulk_items = []
                 for it in items:
                     item_data = {
@@ -739,39 +795,63 @@ class ItemOperations:
                         "price": it["price_cents"],
                         "type": "buy_now"
                     }
-
                     if description:
                         item_data["description"] = description
-
                     bulk_items.append(item_data)
 
                 resp = bulk_list(apikey, bulk_items)
-                listings = resp.get("data", []) if isinstance(resp, dict) else resp
+                results[apikey] = (items, resp)
+            return results
 
-                if not listings:
-                    warning(pw, "Error", "Failed to relist items.")
-                    return
+        self._set_buttons_enabled(False)
 
-                for i, listing in enumerate(listings):
-                    if i >= len(items):
-                        break
-                    it = items[i]
-                    listing_id = listing.get("id")
-                    if listing_id:
-                        self._update_item_as_sold(it["asset_id"], it["price_cents"], listing_id)
-                        successful.append((it["name"], it["price_cents"] / 100.0))
+        worker = ApiWorker(_do_swap)
+        worker.signals.result.connect(lambda res: self._on_swap_result(res, to_swap))
+        worker.signals.error.connect(self._on_swap_error)
+        worker.signals.finished.connect(lambda: self._set_buttons_enabled(True))
+        self.threadpool.start(worker)
 
-            if successful:
-                self.apply_filters_fn()
-                self._show_grouped_operations(successful, "Items Relisted")
-                self.table.clearSelection()
-            else:
-                warning(pw, "Warning", "No items were relisted.")
+    def _on_swap_result(self, results, to_swap):
+        """Обработка результата перевыставления."""
+        pw = self.parent_widget
+        self.table.setSortingEnabled(False)
 
-        except Exception as e:
-            warning(pw, "Error", f"Failed to relist items: {str(e)}")
-        finally:
-            self.table.setSortingEnabled(True)
+        # Обновляем все предметы как снятые
+        for apikey, items in to_swap.items():
+            for it in items:
+                self._update_item_as_unsold_by_asset_id(it["asset_id"])
+
+        # Обновляем как выставленные с новыми listing_id
+        successful = []
+        for apikey, (items, resp) in results.items():
+            listings = resp.get("data", []) if isinstance(resp, dict) else resp
+            if not listings:
+                warning(pw, "Error", "Failed to relist items.")
+                self.table.setSortingEnabled(True)
+                return
+
+            for i, listing in enumerate(listings):
+                if i >= len(items):
+                    break
+                it = items[i]
+                listing_id = listing.get("id")
+                if listing_id:
+                    self._update_item_as_sold(it["asset_id"], it["price_cents"], listing_id)
+                    successful.append((it["name"], it["price_cents"] / 100.0))
+
+        self.table.setSortingEnabled(True)
+
+        if successful:
+            self.apply_filters_fn()
+            self._show_grouped_operations(successful, "Items Relisted")
+            self.table.clearSelection()
+        else:
+            warning(pw, "Warning", "No items were relisted.")
+
+    def _on_swap_error(self, error):
+        """Обработка ошибки перевыставления."""
+        e, tb = error
+        warning(self.parent_widget, "Error", f"Failed to relist items: {str(e)}")
 
     def show_user_info(self):
         """Показывает информацию о пользователе."""
