@@ -45,7 +45,7 @@ config.json
 cache/
 *.log
 
-# Documentation (содержит CLAUDE.md и другие служебные файлы)
+# Служебные .md файлы
 *.md
 
 # Исключения - разрешить README файлы
