@@ -1,0 +1,214 @@
+import os
+import json
+import urllib.request
+import urllib.error
+import hashlib
+from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
+import threading
+from PyQt6.QtCore import QMetaObject, Qt, Q_ARG, QObject, pyqtSlot
+
+CACHE_DIR = "cache"
+os.makedirs(CACHE_DIR, exist_ok=True)
+
+imageloader_pool = ThreadPoolExecutor(max_workers=4)
+cache_lock = threading.Lock()
+
+_downloading = {}
+_downloading_lock = threading.Lock()
+
+_callback_receiver = None
+
+
+class CallbackReceiver(QObject):
+    """Принимает и выполняет callbacks в главном потоке Qt."""
+
+    @pyqtSlot(object)
+    def _invoke_callback(self, callback_fn):
+        try:
+            callback_fn()
+        except Exception as e:
+            print(f"Error in callback: {e}")
+
+
+def init_callback_receiver():
+    """Инициализировать CallbackReceiver. Вызывать после создания QApplication."""
+    global _callback_receiver
+    _callback_receiver = CallbackReceiver()
+
+
+def load_config():
+    try:
+        with open("config.json", "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print("Config file not found!")
+        return None
+
+
+def get_image_extension(url: str, content_type: str = None) -> str:
+    """Определяет расширение файла на основе URL или Content-Type."""
+    if '.' in url.split('/')[-1]:
+        parts = url.split('/')[-1].split('.')
+        if len(parts) > 1:
+            ext = parts[-1].split('?')[0]
+            if ext.lower() in ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg']:
+                return f'.{ext.lower()}'
+
+    if content_type:
+        if 'png' in content_type.lower():
+            return '.png'
+        elif 'jpeg' in content_type.lower() or 'jpg' in content_type.lower():
+            return '.jpg'
+        elif 'gif' in content_type.lower():
+            return '.gif'
+        elif 'webp' in content_type.lower():
+            return '.webp'
+        elif 'svg' in content_type.lower():
+            return '.svg'
+
+    return '.png'
+
+
+def get_hashed_filename(url: str, extension: str) -> str:
+    """Создает короткое хэшированное имя файла на основе URL."""
+    url_hash = hashlib.md5(url.encode('utf-8')).hexdigest()
+    return f"{url_hash}{extension}"
+
+
+def invoke_callback_in_main_thread(callback, *args):
+    """Вызывает callback в главном потоке Qt."""
+    if _callback_receiver and callback:
+        def wrapper():
+            callback(*args)
+
+        QMetaObject.invokeMethod(
+            _callback_receiver,
+            "_invoke_callback",
+            Qt.ConnectionType.QueuedConnection,
+            Q_ARG(object, wrapper)
+        )
+    elif callback:
+        callback(*args)
+
+
+def cache_image(url: str):
+    """Кэширует изображение с коротким хэшированным именем файла."""
+    if not url:
+        return None
+
+    extension = get_image_extension(url)
+    hashed_filename = get_hashed_filename(url, extension)
+    filepath = os.path.join(CACHE_DIR, hashed_filename)
+
+    if os.path.exists(filepath):
+        return filepath
+
+    try:
+        with urllib.request.urlopen(url, timeout=5) as response:
+            content_type = response.headers.get('Content-Type', '')
+            extension = get_image_extension(url, content_type)
+            hashed_filename = get_hashed_filename(url, extension)
+            filepath = os.path.join(CACHE_DIR, hashed_filename)
+
+            if os.path.exists(filepath):
+                return filepath
+
+            with open(filepath, 'wb') as f:
+                f.write(response.read())
+
+            return filepath
+
+    except Exception as e:
+        print(f"Failed to download image from {url}: {e}")
+        return None
+
+
+def cache_image_async(url: str, callback=None):
+    """Асинхронно кэширует изображение с защитой от race condition."""
+    if not url:
+        if callback:
+            callback(None)
+        return
+
+    if not url.startswith("http"):
+        url = f"https://steamcommunity-a.akamaihd.net/economy/image/{url}"
+
+    extension = get_image_extension(url)
+    hashed_filename = get_hashed_filename(url, extension)
+    filepath = os.path.join(CACHE_DIR, hashed_filename)
+
+    if os.path.exists(filepath):
+        if callback:
+            callback(filepath)
+        return
+
+    with _downloading_lock:
+        if filepath in _downloading:
+            if callback:
+                _downloading[filepath].append(callback)
+            return
+        else:
+            _downloading[filepath] = [callback] if callback else []
+
+    def download():
+        try:
+            if os.path.exists(filepath):
+                with _downloading_lock:
+                    callbacks = _downloading.pop(filepath, [])
+
+                for cb in callbacks:
+                    if cb:
+                        invoke_callback_in_main_thread(cb, filepath)
+                return
+
+            with urllib.request.urlopen(url, timeout=10) as response:
+                content_type = response.headers.get('Content-Type', '')
+                extension = get_image_extension(url, content_type)
+                hashed_filename = get_hashed_filename(url, extension)
+                filepath_final = os.path.join(CACHE_DIR, hashed_filename)
+
+                temp_filepath = filepath_final + '.tmp'
+                with open(temp_filepath, 'wb') as f:
+                    f.write(response.read())
+
+                with cache_lock:
+                    if not os.path.exists(filepath_final):
+                        os.replace(temp_filepath, filepath_final)
+                    elif os.path.exists(temp_filepath):
+                        os.remove(temp_filepath)
+
+                with _downloading_lock:
+                    callbacks = _downloading.pop(filepath, [])
+
+                for cb in callbacks:
+                    if cb:
+                        invoke_callback_in_main_thread(cb, filepath_final)
+
+        except Exception as e:
+            print(f"Failed to download image from {url}: {e}")
+
+            with _downloading_lock:
+                callbacks = _downloading.pop(filepath, [])
+
+            for cb in callbacks:
+                if cb:
+                    invoke_callback_in_main_thread(cb, None)
+
+    imageloader_pool.submit(download)
+
+
+def calculate_days_on_sale(created_at: str) -> str:
+    """Вычисляет количество дней и часов с момента выставления на продажу."""
+    try:
+        created_at_dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        delta = now - created_at_dt
+
+        days = delta.days
+        hours = delta.seconds // 3600
+
+        return f"{days}d {hours}h"
+    except Exception as e:
+        print(f"Error parsing date: {e}")
+        return ""
