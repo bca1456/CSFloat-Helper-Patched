@@ -65,7 +65,6 @@ class SteamInventoryApp(QMainWindow):
 
         self.setWindowIcon(QIcon(os.path.join(self.iconpath, "steam.png")))
         self._update_native_titlebar()
-        self.show()
         self.load_data()
 
     def is_position_valid(self, x, y):

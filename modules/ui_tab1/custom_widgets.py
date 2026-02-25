@@ -232,11 +232,5 @@ class AccountSettingsDialog(QDialog):
         keep_online = self.keep_online_switch.isChecked()
         description = self.description_input.text()
 
-        self.settings.setValue(f"account_{key_id(self.api_key)}_keep_online", keep_online)
-        self.settings.setValue(f"account_{key_id(self.api_key)}_description", description)
-
-        self.settings.sync()
-
         self.settings_saved.emit(self.api_key, keep_online, description)
-
         self.accept()

@@ -472,9 +472,9 @@ class Tab1(QWidget):
 
     def load_column_widths(self):
         for i in range(self.inventory_table.columnCount()):
-            width = self.settings.value(f"tab1_column_width_{i}", type=int)
-            if width:
-                self.inventory_table.setColumnWidth(i, width)
+            key = f"tab1_column_width_{i}"
+            if self.settings.contains(key):
+                self.inventory_table.setColumnWidth(i, self.settings.value(key, type=int))
             else:
                 self.inventory_table.setColumnWidth(i, DEFAULT_COLUMN_WIDTHS[i])
 
