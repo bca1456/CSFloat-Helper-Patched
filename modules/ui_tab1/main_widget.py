@@ -146,13 +146,14 @@ class Tab1(QWidget):
         )
 
         self.populator = TablePopulator(
-            self.inventory_table, self.icon_path, self.font(), self,
+            self.inventory_table, self.icon_path, self,
         )
 
         self.ops = ItemOperations(
             self.inventory_table, self.store, self.icon_path,
-            self.font(), self, self.apply_filters,
+            self, self.apply_filters,
         )
+        self.ops.asset_index = self.populator.asset_index
         self.ops.bind_price_input(self.price_input)
         self.ops.bind_action_buttons(self.action_buttons)
 

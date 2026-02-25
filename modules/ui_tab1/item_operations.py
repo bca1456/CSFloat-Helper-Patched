@@ -29,13 +29,13 @@ from modules.models.columns import (
 class ItemOperations:
     """Операции с предметами: продажа, изменение цены, снятие, перевыставление."""
 
-    def __init__(self, table, store, icon_path, font, parent_widget, apply_filters_fn):
+    def __init__(self, table, store, icon_path, parent_widget, apply_filters_fn):
         self.table = table
         self.store = store
         self.icon_path = icon_path
-        self.font = font
         self.parent_widget = parent_widget
         self.apply_filters_fn = apply_filters_fn
+        self.asset_index = {}
         self.price_input = None
         self.action_buttons = {}
         self.threadpool = QThreadPool.globalInstance()
@@ -204,11 +204,10 @@ class ItemOperations:
     # =========================================================================
 
     def _find_row_by_asset_id(self, asset_id):
-        """Находит строку таблицы по asset_id."""
-        for r in range(self.table.rowCount()):
-            asset_it = self.table.item(r, COL_ASSET_ID)
-            if asset_it and asset_it.text() == asset_id:
-                return r
+        """Находит строку таблицы по asset_id через индекс (O(1))."""
+        item = self.asset_index.get(asset_id)
+        if item is not None:
+            return item.row()
         return -1
 
     def _update_item_as_sold(self, asset_id, price_cents, listing_id):
@@ -220,23 +219,19 @@ class ItemOperations:
         created_at = datetime.now(timezone.utc).isoformat()
 
         days_item = QTableWidgetItem("0d 0h")
-        days_item.setFont(self.font)
         self.table.setItem(row, COL_DAYS, days_item)
 
-        self.table.setCellWidget(row, COL_PRICE, create_price_widget(price_cents, self.icon_path, self.font))
+        self.table.setCellWidget(row, COL_PRICE, create_price_widget(price_cents, self.icon_path))
 
         listing_item = QTableWidgetItem(str(listing_id))
-        listing_item.setFont(self.font)
         self.table.setItem(row, COL_LISTING_ID, listing_item)
 
         created_item = QTableWidgetItem(created_at)
-        created_item.setFont(self.font)
         self.table.setItem(row, COL_CREATED_AT, created_item)
 
         pv_item = QTableWidgetItem()
         pv_item.setData(Qt.ItemDataRole.DisplayRole, price_cents)
         pv_item.setData(Qt.ItemDataRole.UserRole, price_cents)
-        pv_item.setFont(self.font)
         self.table.setItem(row, COL_PRICE_VALUE, pv_item)
 
     def _update_item_price(self, asset_id, new_price_cents):
@@ -245,12 +240,11 @@ class ItemOperations:
         if row == -1:
             return
 
-        self.table.setCellWidget(row, COL_PRICE, create_price_widget(new_price_cents, self.icon_path, self.font))
+        self.table.setCellWidget(row, COL_PRICE, create_price_widget(new_price_cents, self.icon_path))
 
         pv_item = QTableWidgetItem()
         pv_item.setData(Qt.ItemDataRole.DisplayRole, new_price_cents)
         pv_item.setData(Qt.ItemDataRole.UserRole, new_price_cents)
-        pv_item.setFont(self.font)
         self.table.setItem(row, COL_PRICE_VALUE, pv_item)
 
     def _update_item_as_unsold(self, row):

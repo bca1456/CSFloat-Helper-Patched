@@ -15,6 +15,27 @@ from modules.models.columns import (
 from .constants import RARITY_COLOR_MAP
 
 
+class EmptyLastItem(QTableWidgetItem):
+    """QTableWidgetItem, пустые значения которого всегда внизу при сортировке."""
+
+    def __lt__(self, other):
+        self_text = self.text()
+        other_text = other.text()
+
+        if not self_text and not other_text:
+            return False
+
+        header = self.tableWidget().horizontalHeader()
+        ascending = header.sortIndicatorOrder() == Qt.SortOrder.AscendingOrder
+
+        if not self_text:
+            return not ascending
+        if not other_text:
+            return ascending
+
+        return self_text < other_text
+
+
 def create_color_icon(color: QColor, width: int = 5, height: int = 30) -> QIcon:
     """Создаёт цветную иконку для редкости."""
     pixmap = QPixmap(width, height)
@@ -27,7 +48,7 @@ def create_color_icon(color: QColor, width: int = 5, height: int = 30) -> QIcon:
     return QIcon(pixmap)
 
 
-def create_price_widget(price_cents, icon_path, font):
+def create_price_widget(price_cents, icon_path):
     """Создаёт виджет цены с логотипом CSFloat."""
     price_widget = QWidget()
     lay = QHBoxLayout(price_widget)
@@ -42,7 +63,6 @@ def create_price_widget(price_cents, icon_path, font):
         lay.addWidget(logo)
 
     price_label = QLabel(f"${price_cents / 100:.2f}")
-    price_label.setFont(font)
     price_label.setStyleSheet(Theme.transparent_widget())
     lay.addWidget(price_label)
     lay.addStretch(1)
@@ -55,14 +75,15 @@ def create_price_widget(price_cents, icon_path, font):
 class TablePopulator:
     """Заполнение таблицы инвентаря."""
 
-    def __init__(self, table, icon_path, font, event_filter_target):
+    def __init__(self, table, icon_path, event_filter_target):
         self.table = table
         self.icon_path = icon_path
-        self.font = font
         self.event_filter_target = event_filter_target
+        self.asset_index = {}
 
     def populate(self, inventory, stall):
         """Заполняет таблицу с нуля."""
+        self.asset_index = {}
         self.table.setRowCount(0)
         self.table.setSortingEnabled(False)
         self._add_items(inventory, stall)
@@ -103,7 +124,6 @@ class TablePopulator:
 
                 name_item = QTableWidgetItem(market_hash_name)
                 name_item.setIcon(color_icon)
-                name_item.setFont(self.font)
                 name_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
                 self.table.setItem(row, COL_NAME, name_item)
 
@@ -180,8 +200,7 @@ class TablePopulator:
         """Заполняет Float Value."""
         float_value = item.get("float_value")
         float_text = f"{float_value:.14f}" if isinstance(float_value, (int, float)) else ""
-        float_item = QTableWidgetItem(float_text)
-        float_item.setFont(self.font)
+        float_item = EmptyLastItem(float_text)
         self.table.setItem(row, COL_FLOAT, float_item)
 
     def _populate_seed(self, row, item):
@@ -189,7 +208,6 @@ class TablePopulator:
         paint_seed = item.get("paint_seed")
         seed_text = str(paint_seed) if paint_seed is not None else ""
         seed_item = QTableWidgetItem(seed_text)
-        seed_item.setFont(self.font)
         if paint_seed is not None:
             seed_item.setData(Qt.ItemDataRole.UserRole, int(paint_seed))
         self.table.setItem(row, COL_SEED, seed_item)
@@ -198,24 +216,20 @@ class TablePopulator:
         """Заполняет данные о продаже."""
         days_text = calculate_days_on_sale(stall_item.get("created_at", ""))
         days_item = QTableWidgetItem(days_text)
-        days_item.setFont(self.font)
         self.table.setItem(row, COL_DAYS, days_item)
 
         price_cents = int(stall_item.get("price", 0)) or 0
-        self.table.setCellWidget(row, COL_PRICE, create_price_widget(price_cents, self.icon_path, self.font))
+        self.table.setCellWidget(row, COL_PRICE, create_price_widget(price_cents, self.icon_path))
 
         listing_id_item = QTableWidgetItem(str(stall_item.get("id", "")))
-        listing_id_item.setFont(self.font)
         self.table.setItem(row, COL_LISTING_ID, listing_id_item)
 
         created_at_item = QTableWidgetItem(str(stall_item.get("created_at", "")))
-        created_at_item.setFont(self.font)
         self.table.setItem(row, COL_CREATED_AT, created_at_item)
 
         price_value_item = QTableWidgetItem()
         price_value_item.setData(Qt.ItemDataRole.DisplayRole, price_cents)
         price_value_item.setData(Qt.ItemDataRole.UserRole, price_cents)
-        price_value_item.setFont(self.font)
         self.table.setItem(row, COL_PRICE_VALUE, price_value_item)
 
     def _populate_empty_stall_data(self, row):
@@ -234,7 +248,6 @@ class TablePopulator:
     def _populate_hidden_columns(self, row, item, asset_id, market_hash_name):
         """Заполняет скрытые колонки (API Key, Collection, Rarity, Wear)."""
         api_key_item = QTableWidgetItem(item.get("api_key", "NA") or "NA")
-        api_key_item.setFont(self.font)
         self.table.setItem(row, COL_API_KEY, api_key_item)
 
         collection = item.get("collection", "NA") or "NA"
@@ -245,11 +258,9 @@ class TablePopulator:
         collection = re.sub(r"\u2605", "", collection)
 
         collection_item = QTableWidgetItem(collection)
-        collection_item.setFont(self.font)
         self.table.setItem(row, COL_COLLECTION, collection_item)
 
         rarity_item = QTableWidgetItem(str(item.get("rarity", "NA") or "NA"))
-        rarity_item.setFont(self.font)
         self.table.setItem(row, COL_RARITY, rarity_item)
 
         wear_name = item.get("wear_name", "NA") or "NA"
@@ -258,9 +269,8 @@ class TablePopulator:
             wear_name = m.group(1) if m else "NA"
 
         wear_item = QTableWidgetItem(wear_name)
-        wear_item.setFont(self.font)
         self.table.setItem(row, COL_WEAR, wear_item)
 
         asset_item = QTableWidgetItem(asset_id)
-        asset_item.setFont(self.font)
         self.table.setItem(row, COL_ASSET_ID, asset_item)
+        self.asset_index[asset_id] = asset_item

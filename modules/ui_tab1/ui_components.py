@@ -228,10 +228,11 @@ def create_inventory_table(parent, icon_path, on_header_click_fn):
     table.setColumnCount(COLUMN_COUNT)
     table.setHorizontalHeaderLabels(COLUMN_HEADERS)
 
-    header_font = QFont(Theme.FONT_FAMILY)
-    header_font.setPointSize(Theme.FONT_SIZE)
-    header_font.setBold(False)
-    table.horizontalHeader().setFont(header_font)
+    table_font = QFont(Theme.FONT_FAMILY)
+    table_font.setPointSize(Theme.FONT_SIZE)
+    table_font.setWeight(QFont.Weight.Normal)
+    table.setFont(table_font)
+    table.horizontalHeader().setFont(table_font)
 
     table.horizontalHeader().setStyleSheet(Theme.table_header_style())
 
