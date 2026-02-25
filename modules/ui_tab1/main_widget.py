@@ -11,7 +11,7 @@ from modules.theme import Theme
 from modules.api import get_user_info, get_inventory_data, get_stall_data, get_schema
 from modules.workers import ApiWorker, KeepOnlineWorker
 from modules.collections_manager import update_collections_from_schema, get_collections
-from modules.utils import key_id, migrate_settings
+from modules.utils import key_id, migrate_settings, shutdown_image_pool
 from .constants import refresh_collections
 from modules.models.columns import (
     COL_NAME, COL_STICKERS, COL_KEYCHAINS, COL_FLOAT, COL_SEED,
@@ -246,8 +246,8 @@ class Tab1(QWidget):
 
             if et == QEvent.Type.ToolTip:
                 try:
-                    gp = event.globalPos()
-                except Exception:
+                    gp = event.globalPosition().toPoint()
+                except AttributeError:
                     gp = QCursor.pos()
 
                 self.tooltip.show_text(getattr(obj, '_tooltip_text', ''), gp)
@@ -338,7 +338,8 @@ class Tab1(QWidget):
 
         self.store.add_user_result(api_key, user_info, inventory)
 
-        worker = ApiWorker(self.fetch_stall_data, api_key)
+        steam_id = user_info.get("steam_id") if user_info else None
+        worker = ApiWorker(self.fetch_stall_data, api_key, steam_id)
         worker.signals.result.connect(self.handle_stall_result)
         worker.signals.error.connect(self.handle_stall_error)
         QThreadPool.globalInstance().start(worker)
@@ -355,13 +356,8 @@ class Tab1(QWidget):
             self.inventory_table.setSortingEnabled(True)
             self.ops._set_buttons_enabled(True)
 
-    def fetch_stall_data(self, api_key):
+    def fetch_stall_data(self, api_key, steam_id):
         """Fetch stall data."""
-        user_info = next((u for u in self.store.user_infos if u.get("api_key") == api_key), None)
-        if not user_info:
-            return {"api_key": api_key, "stall": []}
-
-        steam_id = user_info.get("steam_id")
         if not steam_id:
             return {"api_key": api_key, "stall": []}
 
@@ -491,3 +487,4 @@ class Tab1(QWidget):
         if self.keep_online_worker and self.keep_online_worker.isRunning():
             self.keep_online_worker.stop()
             self.keep_online_worker.wait(3000)
+        shutdown_image_pool()

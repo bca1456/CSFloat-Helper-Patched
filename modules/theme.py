@@ -439,6 +439,7 @@ class Theme:
                 border: none;
                 border-right: 1px solid {cls.BORDER_GRID};
                 border-bottom: 2px solid {cls.BORDER_GRID};
+                padding: 0px 4px;
             }}
         """
 

@@ -1,6 +1,7 @@
 # modules/ui_tab1/item_operations.py
 
 import os
+import time
 from datetime import datetime, timezone
 from collections import defaultdict
 
@@ -17,6 +18,7 @@ from modules.utils import cache_image_async
 from modules.messagebox import warning, information
 from modules.theme import Theme
 from modules.models.inventory_store import InventoryStore
+from .table_population import create_price_widget
 from modules.models.columns import (
     COL_NAME, COL_STICKERS, COL_KEYCHAINS, COL_FLOAT, COL_SEED,
     COL_DAYS, COL_PRICE, COL_LISTING_ID, COL_ASSET_ID, COL_CREATED_AT,
@@ -201,30 +203,6 @@ class ItemOperations:
     # Обновление таблицы
     # =========================================================================
 
-    def _create_price_widget(self, price_cents):
-        """Создаёт виджет цены с логотипом."""
-        price_widget = QWidget()
-        lay = QHBoxLayout(price_widget)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(4)
-
-        logo = QLabel()
-        logo_path = os.path.join(self.icon_path, "csfloat_logo.png")
-        if os.path.exists(logo_path):
-            logo.setPixmap(QPixmap(logo_path).scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio))
-            logo.setStyleSheet(Theme.transparent_widget())
-            lay.addWidget(logo)
-
-        price_label = QLabel(f" ${price_cents / 100:.2f}")
-        price_label.setFont(self.font)
-        price_label.setStyleSheet(Theme.transparent_widget())
-        lay.addWidget(price_label)
-        lay.addStretch(1)
-
-        price_widget.setStyleSheet(Theme.transparent_widget())
-        price_widget.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        return price_widget
-
     def _find_row_by_asset_id(self, asset_id):
         """Находит строку таблицы по asset_id."""
         for r in range(self.table.rowCount()):
@@ -245,7 +223,7 @@ class ItemOperations:
         days_item.setFont(self.font)
         self.table.setItem(row, COL_DAYS, days_item)
 
-        self.table.setCellWidget(row, COL_PRICE, self._create_price_widget(price_cents))
+        self.table.setCellWidget(row, COL_PRICE, create_price_widget(price_cents, self.icon_path, self.font))
 
         listing_item = QTableWidgetItem(str(listing_id))
         listing_item.setFont(self.font)
@@ -267,7 +245,7 @@ class ItemOperations:
         if row == -1:
             return
 
-        self.table.setCellWidget(row, COL_PRICE, self._create_price_widget(new_price_cents))
+        self.table.setCellWidget(row, COL_PRICE, create_price_widget(new_price_cents, self.icon_path, self.font))
 
         pv_item = QTableWidgetItem()
         pv_item.setData(Qt.ItemDataRole.DisplayRole, new_price_cents)
@@ -333,7 +311,7 @@ class ItemOperations:
             if price * 100 > InventoryStore.MAX_PRICE:
                 warning(pw, "Warning", f"Maximum allowed price is ${InventoryStore.MAX_PRICE / 100:.2f} USD")
                 return
-            price_cents = int(price * 100)
+            price_cents = int(round(price * 100))
         except ValueError as e:
             warning(pw, "Error", f"Invalid price input: {e}")
             return
@@ -421,14 +399,15 @@ class ItemOperations:
                 warning(pw, "Error", "Failed to list items. Empty response from server.")
                 return
 
-            for i, listing in enumerate(listings):
-                if i >= len(items):
-                    break
-                item = items[i]
+            items_by_asset = {item["asset_id"]: item for item in items}
+
+            for listing in listings:
                 listing_id = listing.get("id", "")
-                if listing_id:
+                asset_id = listing.get("item", {}).get("asset_id", "")
+                if listing_id and asset_id in items_by_asset:
+                    item = items_by_asset[asset_id]
                     successful.append((item["name"], item["price"] / 100))
-                    self._update_item_as_sold(item["asset_id"], item["price"], listing_id)
+                    self._update_item_as_sold(asset_id, item["price"], listing_id)
 
         if successful:
             self.apply_filters_fn()
@@ -808,7 +787,7 @@ class ItemOperations:
                 if not resp:
                     raise RuntimeError("Failed to delist items.")
 
-            # Фаза 2: выставляем заново
+            # Фаза 2: выставляем заново с retry, т.к. delist уже прошёл
             results = {}
             for apikey, items in to_swap.items():
                 description = descriptions.get(apikey, "")
@@ -823,7 +802,16 @@ class ItemOperations:
                         item_data["description"] = description
                     bulk_items.append(item_data)
 
-                resp = bulk_list(apikey, bulk_items)
+                resp = None
+                for attempt in range(5):
+                    try:
+                        resp = bulk_list(apikey, bulk_items)
+                        break
+                    except Exception:
+                        if attempt < 4:
+                            time.sleep(2.0 * (attempt + 1))
+                        else:
+                            raise
                 results[apikey] = (items, resp)
             return results
 
@@ -852,13 +840,14 @@ class ItemOperations:
                 self.table.setSortingEnabled(True)
                 return
 
-            for i, listing in enumerate(listings):
-                if i >= len(items):
-                    break
-                it = items[i]
+            items_by_asset = {it["asset_id"]: it for it in items}
+
+            for listing in listings:
                 listing_id = listing.get("id")
-                if listing_id:
-                    self._update_item_as_sold(it["asset_id"], it["price_cents"], listing_id)
+                asset_id = listing.get("item", {}).get("asset_id", "")
+                if listing_id and asset_id in items_by_asset:
+                    it = items_by_asset[asset_id]
+                    self._update_item_as_sold(asset_id, it["price_cents"], listing_id)
                     successful.append((it["name"], it["price_cents"] / 100.0))
 
         self.table.setSortingEnabled(True)

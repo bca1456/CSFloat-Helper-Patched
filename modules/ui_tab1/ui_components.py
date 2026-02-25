@@ -168,16 +168,18 @@ def change_icon_color(icon_path, color_hex):
         return QPixmap()
 
     image = image.convertToFormat(QImage.Format.Format_ARGB32)
-    color = QColor(color_hex)
-    
-    for y in range(image.height()):
-        for x in range(image.width()):
-            pixel = image.pixelColor(x, y)
-            if pixel.alpha() > 0:
-                color.setAlpha(pixel.alpha())
-                image.setPixelColor(x, y, color)
-                
-    return QPixmap.fromImage(image)
+    source = QPixmap.fromImage(image)
+
+    colored = QPixmap(source.size())
+    colored.fill(Qt.GlobalColor.transparent)
+
+    painter = QPainter(colored)
+    painter.drawPixmap(0, 0, source)
+    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+    painter.fillRect(colored.rect(), QColor(color_hex))
+    painter.end()
+
+    return colored
 
 
 def create_action_buttons(parent, icon_path, callbacks):

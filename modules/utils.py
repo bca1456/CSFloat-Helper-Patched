@@ -23,6 +23,11 @@ _downloading_lock = threading.Lock()
 _callback_receiver = None
 
 
+def shutdown_image_pool():
+    """Останавливает пул загрузки изображений."""
+    imageloader_pool.shutdown(wait=False)
+
+
 class CallbackReceiver(QObject):
     """Принимает и выполняет callbacks в главном потоке Qt."""
 

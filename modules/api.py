@@ -13,8 +13,6 @@ LISTINGS_URL = "https://csfloat.com/api/v1/listings"
 BULK_LIST_URL = "https://csfloat.com/api/v1/listings/bulk-list"
 BULK_DELIST_URL = "https://csfloat.com/api/v1/listings/bulk-delist"
 BULK_MODIFY_URL = "https://csfloat.com/api/v1/listings/bulk-modify"
-BUY_ORDERS_URL_TEMPLATE = "https://csfloat.com/api/v1/me/buy-orders?page={page}&limit=100&order=desc"
-BUY_ORDERS_DELETE_URL = "https://csfloat.com/api/v1/buy-orders/{order_id}"
 API_SCHEMA = "https://csfloat.com/api/v1/schema"
 
 # Retry settings
@@ -204,45 +202,6 @@ def bulk_modify(api_key: str, modifications: list):
     except urllib.error.URLError as err:
         raise ValueError(f"An unexpected error occurred: {err}") from err
 
-
-def get_buy_orders(api_key: str):
-    """Get all buy orders with pagination support."""
-    headers = {"Authorization": api_key}
-    all_orders = []
-    page = 0
-    while True:
-        url = BUY_ORDERS_URL_TEMPLATE.format(page=page)
-        req = urllib.request.Request(url, headers=headers)
-        try:
-            data = _request_json(req)
-            orders = data.get("orders", [])
-            all_orders.extend(orders)
-            if len(orders) < 100:
-                break
-            page += 1
-        except urllib.error.HTTPError as e:
-            print(f"HTTP error occurred: {e}")
-            return None
-        except urllib.error.URLError as e:
-            print(f"Other error occurred: {e}")
-            return None
-    return all_orders
-
-
-def delete_order_by_id(order_id: str, api_key: str) -> bool:
-    """Delete buy order by ID."""
-    url = BUY_ORDERS_DELETE_URL.format(order_id=order_id)
-    headers = {"Authorization": api_key}
-    req = urllib.request.Request(url, headers=headers, method="DELETE")
-    try:
-        with urllib.request.urlopen(req) as response:
-            return response.status == 200
-    except urllib.error.HTTPError as e:
-        print(f"HTTP error occurred: {e}")
-        return False
-    except urllib.error.URLError as e:
-        print(f"Other error occurred: {e}")
-        return False
 
 def get_schema():
     """Получает схему (коллекции) с CSFloat API."""

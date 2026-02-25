@@ -4,7 +4,7 @@ import os
 import re
 from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLabel, QTableWidgetItem, QApplication
 from PyQt6.QtGui import QPixmap, QIcon, QColor, QBrush, QPainter
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QEventLoop
 from modules.utils import cache_image_async, calculate_days_on_sale
 from modules.theme import Theme
 from modules.models.columns import (
@@ -27,6 +27,31 @@ def create_color_icon(color: QColor, width: int = 5, height: int = 30) -> QIcon:
     return QIcon(pixmap)
 
 
+def create_price_widget(price_cents, icon_path, font):
+    """Создаёт виджет цены с логотипом CSFloat."""
+    price_widget = QWidget()
+    lay = QHBoxLayout(price_widget)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(4)
+
+    logo = QLabel()
+    logo_path = os.path.join(icon_path, "csfloat_logo.png")
+    if os.path.exists(logo_path):
+        logo.setPixmap(QPixmap(logo_path).scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio))
+        logo.setStyleSheet(Theme.transparent_widget())
+        lay.addWidget(logo)
+
+    price_label = QLabel(f"${price_cents / 100:.2f}")
+    price_label.setFont(font)
+    price_label.setStyleSheet(Theme.transparent_widget())
+    lay.addWidget(price_label)
+    lay.addStretch(1)
+
+    price_widget.setStyleSheet(Theme.transparent_widget())
+    price_widget.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+    return price_widget
+
+
 class TablePopulator:
     """Заполнение таблицы инвентаря."""
 
@@ -45,7 +70,10 @@ class TablePopulator:
 
     def append(self, inventory, stall):
         """Добавляет предметы в таблицу без очистки."""
+        was_sorting = self.table.isSortingEnabled()
+        self.table.setSortingEnabled(False)
         self._add_items(inventory, stall)
+        self.table.setSortingEnabled(was_sorting)
 
     def _add_items(self, inventory, stall):
         """Добавляет строки в таблицу батчами."""
@@ -92,102 +120,61 @@ class TablePopulator:
 
                 self._populate_hidden_columns(row, item, asset_id, market_hash_name)
 
-            QApplication.processEvents()
+            QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+
+    def _populate_icon_cells(self, row, item, field, column):
+        """Заполняет ячейку с иконками (стикеры/брелки) с асинхронной загрузкой."""
+        entries = item.get(field, []) or []
+        layout = QHBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+
+        for entry in entries:
+            icon_url = entry.get("icon_url")
+            if not icon_url:
+                continue
+
+            lbl = QLabel()
+            lbl.setFixedSize(20, 20)
+
+            name = entry.get("name", "Unknown")
+            pattern = entry.get("pattern", "")
+            lbl._tooltip_text = f"{name}\n#{pattern}" if pattern else name
+
+            lbl.setMouseTracking(True)
+            lbl.installEventFilter(self.event_filter_target)
+            lbl.setStyleSheet("")
+
+            def create_callback(label):
+                def on_loaded(path):
+                    if path and os.path.exists(path):
+                        pixmap = QPixmap(path)
+                        if not pixmap.isNull():
+                            label.setPixmap(pixmap.scaled(
+                                20, 20,
+                                Qt.AspectRatioMode.KeepAspectRatio,
+                                Qt.TransformationMode.SmoothTransformation
+                            ))
+                return on_loaded
+
+            cache_image_async(icon_url, create_callback(lbl))
+            layout.addWidget(lbl)
+
+        layout.addStretch(1)
+
+        widget = QWidget()
+        widget.setLayout(layout)
+        widget.setStyleSheet(Theme.transparent_widget())
+        widget.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.table.setCellWidget(row, column, widget)
 
     def _populate_stickers(self, row, item):
-        """Заполняет стикеры с асинхронной загрузкой иконок."""
-        stickers = item.get("stickers", []) or []
-        sticker_layout = QHBoxLayout()
-        sticker_layout.setContentsMargins(0, 0, 0, 0)
-        sticker_layout.setSpacing(2)
-
-        for st in stickers:
-            sticker_url = st.get("icon_url")
-            if not sticker_url:
-                continue
-
-            lbl = QLabel()
-            lbl.setFixedSize(20, 20)
-            sticker_text = st.get("name", "Unknown")
-            lbl._tooltip_text = sticker_text
-            lbl.setMouseTracking(True)
-            lbl.installEventFilter(self.event_filter_target)
-            lbl.setStyleSheet("")
-
-            def create_callback(label):
-                def on_loaded(path):
-                    if path and os.path.exists(path):
-                        pixmap = QPixmap(path)
-                        if not pixmap.isNull():
-                            label.setPixmap(pixmap.scaled(
-                                20, 20,
-                                Qt.AspectRatioMode.KeepAspectRatio,
-                                Qt.TransformationMode.SmoothTransformation
-                            ))
-
-                return on_loaded
-
-            cache_image_async(sticker_url, create_callback(lbl))
-            sticker_layout.addWidget(lbl)
-
-        sticker_layout.addStretch(1)
-
-        sticker_widget = QWidget()
-        sticker_widget.setLayout(sticker_layout)
-        sticker_widget.setStyleSheet(Theme.transparent_widget())
-        sticker_widget.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.table.setCellWidget(row, COL_STICKERS, sticker_widget)
+        """Заполняет стикеры."""
+        self._populate_icon_cells(row, item, "stickers", COL_STICKERS)
 
     def _populate_keychains(self, row, item):
-        """Заполняет брелки с асинхронной загрузкой иконок."""
-        keychains = item.get("keychains", []) or []
-        keychain_layout = QHBoxLayout()
-        keychain_layout.setContentsMargins(0, 0, 0, 0)
-        keychain_layout.setSpacing(2)
-
-        for kc in keychains:
-            keychain_url = kc.get("icon_url")
-            if not keychain_url:
-                continue
-
-            lbl = QLabel()
-            lbl.setFixedSize(20, 20)
-            keychain_name = kc.get("name", "Unknown")
-            keychain_pattern = kc.get("pattern", "")
-
-            if keychain_pattern:
-                tooltip_text = f"{keychain_name}\n#{keychain_pattern}"
-            else:
-                tooltip_text = keychain_name
-
-            lbl._tooltip_text = tooltip_text
-            lbl.setMouseTracking(True)
-            lbl.installEventFilter(self.event_filter_target)
-            lbl.setStyleSheet("")
-
-            def create_callback(label):
-                def on_loaded(path):
-                    if path and os.path.exists(path):
-                        pixmap = QPixmap(path)
-                        if not pixmap.isNull():
-                            label.setPixmap(pixmap.scaled(
-                                20, 20,
-                                Qt.AspectRatioMode.KeepAspectRatio,
-                                Qt.TransformationMode.SmoothTransformation
-                            ))
-
-                return on_loaded
-
-            cache_image_async(keychain_url, create_callback(lbl))
-            keychain_layout.addWidget(lbl)
-
-        keychain_layout.addStretch(1)
-
-        keychain_widget = QWidget()
-        keychain_widget.setLayout(keychain_layout)
-        keychain_widget.setStyleSheet(Theme.transparent_widget())
-        keychain_widget.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.table.setCellWidget(row, COL_KEYCHAINS, keychain_widget)
+        """Заполняет брелки."""
+        self._populate_icon_cells(row, item, "keychains", COL_KEYCHAINS)
 
     def _populate_float(self, row, item):
         """Заполняет Float Value."""
@@ -215,29 +202,7 @@ class TablePopulator:
         self.table.setItem(row, COL_DAYS, days_item)
 
         price_cents = int(stall_item.get("price", 0)) or 0
-        price_str = f"{price_cents / 100:.2f}"
-
-        price_widget = QWidget()
-        price_layout = QHBoxLayout(price_widget)
-        price_layout.setContentsMargins(0, 0, 0, 0)
-        price_layout.setSpacing(4)
-
-        logo = QLabel()
-        logo_path = os.path.join(self.icon_path, "csfloat_logo.png")
-        if os.path.exists(logo_path):
-            logo.setPixmap(QPixmap(logo_path).scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio))
-            logo.setStyleSheet(Theme.transparent_widget())
-            price_layout.addWidget(logo)
-
-        price_label = QLabel(f"${price_str}")
-        price_label.setFont(self.font)
-        price_label.setStyleSheet(Theme.transparent_widget())
-        price_layout.addWidget(price_label)
-        price_layout.addStretch(1)
-
-        price_widget.setStyleSheet(Theme.transparent_widget())
-        price_widget.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.table.setCellWidget(row, COL_PRICE, price_widget)
+        self.table.setCellWidget(row, COL_PRICE, create_price_widget(price_cents, self.icon_path, self.font))
 
         listing_id_item = QTableWidgetItem(str(stall_item.get("id", "")))
         listing_id_item.setFont(self.font)
