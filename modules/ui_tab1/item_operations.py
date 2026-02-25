@@ -13,7 +13,7 @@ from PyQt6.QtCore import Qt, QPersistentModelIndex, QRectF, QThreadPool
 
 from modules.api import bulk_list, bulk_delist, bulk_modify
 from modules.workers import ApiWorker
-from modules.utils import cache_image
+from modules.utils import cache_image_async
 from modules.messagebox import warning, information
 from modules.theme import Theme
 from modules.models.inventory_store import InventoryStore
@@ -49,6 +49,31 @@ class ItemOperations:
         """Блокирует/разблокирует кнопки действий."""
         for btn in self.action_buttons.values():
             btn.setEnabled(enabled)
+
+    @staticmethod
+    def _set_rounded_avatar(label, path):
+        """Устанавливает округлённый аватар в QLabel."""
+        if not path:
+            return
+        avatar_pixmap = QPixmap(path)
+        rounded_pixmap = QPixmap(100, 100)
+        rounded_pixmap.fill(Qt.GlobalColor.transparent)
+
+        painter = QPainter(rounded_pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        clip = QPainterPath()
+        clip.addRoundedRect(QRectF(0, 0, 100, 100), 5, 5)
+        painter.setClipPath(clip)
+        painter.drawPixmap(
+            0, 0,
+            avatar_pixmap.scaled(
+                100, 100,
+                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation
+            )
+        )
+        painter.end()
+        label.setPixmap(rounded_pixmap)
 
     # =========================================================================
     # Диалоги
@@ -873,34 +898,13 @@ class ItemOperations:
             avatar_container = QWidget()
             avatar_container.setFixedSize(100, 100)
 
+            avatar_label = QLabel(avatar_container)
+            avatar_label.setFixedSize(100, 100)
+            avatar_label.move(0, 0)
+
             avatar_url = user_info.get("avatar")
-            avatar_path = cache_image(avatar_url) if avatar_url else None
-
-            if avatar_path:
-                avatar_label = QLabel(avatar_container)
-                avatar_label.setFixedSize(100, 100)
-
-                avatar_pixmap = QPixmap(avatar_path)
-                rounded_pixmap = QPixmap(100, 100)
-                rounded_pixmap.fill(Qt.GlobalColor.transparent)
-
-                painter = QPainter(rounded_pixmap)
-                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-                path = QPainterPath()
-                path.addRoundedRect(QRectF(0, 0, 100, 100), 5, 5)
-                painter.setClipPath(path)
-                painter.drawPixmap(
-                    0, 0,
-                    avatar_pixmap.scaled(
-                        100, 100,
-                        Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                        Qt.TransformationMode.SmoothTransformation
-                    )
-                )
-                painter.end()
-
-                avatar_label.setPixmap(rounded_pixmap)
-                avatar_label.move(0, 0)
+            if avatar_url:
+                cache_image_async(avatar_url, lambda path, lbl=avatar_label: self._set_rounded_avatar(lbl, path))
 
             avatar_container.setStyleSheet(Theme.avatar_container())
 
