@@ -4,7 +4,9 @@ import os
 import json
 from datetime import datetime, timezone
 
-CACHE_DIR = "cache"
+_BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+CACHE_DIR = os.path.join(_BASE_DIR, "cache")
 COLLECTIONS_FILE = os.path.join(CACHE_DIR, "collections.json")
 
 os.makedirs(CACHE_DIR, exist_ok=True)

@@ -9,7 +9,9 @@ from concurrent.futures import ThreadPoolExecutor
 import threading
 from PyQt6.QtCore import QMetaObject, Qt, Q_ARG, QObject, QSettings, pyqtSlot
 
-CACHE_DIR = "cache"
+_BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+CACHE_DIR = os.path.join(_BASE_DIR, "cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 imageloader_pool = ThreadPoolExecutor(max_workers=4)
@@ -39,12 +41,13 @@ def init_callback_receiver():
 
 
 def load_config():
+    config_path = os.path.join(_BASE_DIR, "config.json")
     try:
-        with open("config.json", "r", encoding="utf-8") as f:
+        with open(config_path, "r", encoding="utf-8") as f:
             return json.load(f)
     except FileNotFoundError:
-        print("Config file not found!")
-        return None
+        print(f"Config file not found: {config_path}")
+        return {}
 
 
 def key_id(api_key: str) -> str:

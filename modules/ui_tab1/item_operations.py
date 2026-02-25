@@ -472,7 +472,7 @@ class ItemOperations:
 
             try:
                 current_price = float(current_price_label.text().strip().replace("$", "").strip())
-            except:
+            except Exception:
                 continue
 
             new_price_cents = self._calculate_new_price(price_input, current_price)
