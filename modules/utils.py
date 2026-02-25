@@ -188,19 +188,18 @@ def cache_image_async(url: str, callback=None):
         return
 
     with _downloading_lock:
-        if filepath in _downloading:
+        if url in _downloading:
             if callback:
-                _downloading[filepath].append(callback)
+                _downloading[url].append(callback)
             return
         else:
-            _downloading[filepath] = [callback] if callback else []
+            _downloading[url] = [callback] if callback else []
 
     def download():
         try:
             if os.path.exists(filepath):
                 with _downloading_lock:
-                    callbacks = _downloading.pop(filepath, [])
-
+                    callbacks = _downloading.pop(url, [])
                 for cb in callbacks:
                     if cb:
                         invoke_callback_in_main_thread(cb, filepath)
@@ -208,9 +207,9 @@ def cache_image_async(url: str, callback=None):
 
             with urllib.request.urlopen(url, timeout=10) as response:
                 content_type = response.headers.get('Content-Type', '')
-                extension = get_image_extension(url, content_type)
-                hashed_filename = get_hashed_filename(url, extension)
-                filepath_final = os.path.join(CACHE_DIR, hashed_filename)
+                final_ext = get_image_extension(url, content_type)
+                final_name = get_hashed_filename(url, final_ext)
+                filepath_final = os.path.join(CACHE_DIR, final_name)
 
                 temp_filepath = filepath_final + '.tmp'
                 with open(temp_filepath, 'wb') as f:
@@ -223,18 +222,15 @@ def cache_image_async(url: str, callback=None):
                         os.remove(temp_filepath)
 
                 with _downloading_lock:
-                    callbacks = _downloading.pop(filepath, [])
-
+                    callbacks = _downloading.pop(url, [])
                 for cb in callbacks:
                     if cb:
                         invoke_callback_in_main_thread(cb, filepath_final)
 
         except Exception as e:
             print(f"Failed to download image from {url}: {e}")
-
             with _downloading_lock:
-                callbacks = _downloading.pop(filepath, [])
-
+                callbacks = _downloading.pop(url, [])
             for cb in callbacks:
                 if cb:
                     invoke_callback_in_main_thread(cb, None)

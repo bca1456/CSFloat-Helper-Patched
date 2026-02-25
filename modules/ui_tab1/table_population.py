@@ -37,10 +37,18 @@ class TablePopulator:
         self.event_filter_target = event_filter_target
 
     def populate(self, inventory, stall):
-        """Заполняет таблицу инвентаря батчами."""
+        """Заполняет таблицу с нуля."""
         self.table.setRowCount(0)
         self.table.setSortingEnabled(False)
+        self._add_items(inventory, stall)
+        self.table.setSortingEnabled(True)
 
+    def append(self, inventory, stall):
+        """Добавляет предметы в таблицу без очистки."""
+        self._add_items(inventory, stall)
+
+    def _add_items(self, inventory, stall):
+        """Добавляет строки в таблицу батчами."""
         stall_dict = {}
         for st in (stall or []):
             asset_id = st.get("item", {}).get("asset_id")
@@ -85,8 +93,6 @@ class TablePopulator:
                 self._populate_hidden_columns(row, item, asset_id, market_hash_name)
 
             QApplication.processEvents()
-
-        self.table.setSortingEnabled(True)
 
     def _populate_stickers(self, row, item):
         """Заполняет стикеры с асинхронной загрузкой иконок."""

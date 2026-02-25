@@ -276,6 +276,11 @@ class Tab1(QWidget):
     def load_data(self, threadpool):
         """Load data from API."""
         self.store.clear()
+        self.store.stall_total_count = len(self.api_keys)
+
+        self.inventory_table.setRowCount(0)
+        self.inventory_table.setSortingEnabled(False)
+        self.ops._set_buttons_enabled(False)
 
         schema_worker = ApiWorker(self.fetch_schema)
         schema_worker.signals.result.connect(self.handle_schema_result)
@@ -333,8 +338,10 @@ class Tab1(QWidget):
 
         self.store.add_user_result(api_key, user_info, inventory)
 
-        if self.store.all_users_loaded():
-            self.load_stall_data(QThreadPool.globalInstance())
+        worker = ApiWorker(self.fetch_stall_data, api_key)
+        worker.signals.result.connect(self.handle_stall_result)
+        worker.signals.error.connect(self.handle_stall_error)
+        QThreadPool.globalInstance().start(worker)
 
     @pyqtSlot(tuple)
     def handle_api_error(self, error):
@@ -343,17 +350,10 @@ class Tab1(QWidget):
         logging.error(f"API Error: {e}\n{tb}")
         critical(self, "API Error", f"An error occurred while fetching data:\n{e}")
 
-    def load_stall_data(self, threadpool):
-        """Load stall data."""
-        self.store.stall = []
-        self.store.stall_loaded_count = 0
-        self.store.stall_total_count = len(self.api_keys)
-
-        for api_key in self.api_keys:
-            worker = ApiWorker(self.fetch_stall_data, api_key)
-            worker.signals.result.connect(self.handle_stall_result)
-            worker.signals.error.connect(self.handle_stall_error)
-            threadpool.start(worker)
+        self.store.add_stall_result([])
+        if self.store.all_stalls_loaded():
+            self.inventory_table.setSortingEnabled(True)
+            self.ops._set_buttons_enabled(True)
 
     def fetch_stall_data(self, api_key):
         """Fetch stall data."""
@@ -371,10 +371,16 @@ class Tab1(QWidget):
     @pyqtSlot(object)
     def handle_stall_result(self, result):
         """Handle stall data result."""
-        self.store.add_stall_result(result.get("stall", []))
+        api_key = result.get("api_key")
+        stall_data = result.get("stall", [])
+        self.store.add_stall_result(stall_data)
+
+        account_inventory = [item for item in self.store.inventory if item.get("api_key") == api_key]
+        self.populator.append(account_inventory, stall_data)
 
         if self.store.all_stalls_loaded():
-            self.populate_inventory_table()
+            self.inventory_table.setSortingEnabled(True)
+            self.ops._set_buttons_enabled(True)
 
     @pyqtSlot(tuple)
     def handle_stall_error(self, error):
@@ -385,11 +391,8 @@ class Tab1(QWidget):
         self.store.add_stall_result([])
 
         if self.store.all_stalls_loaded():
-            self.populate_inventory_table()
-
-    def populate_inventory_table(self):
-        """Populate inventory table."""
-        self.populator.populate(self.store.inventory, self.store.stall)
+            self.inventory_table.setSortingEnabled(True)
+            self.ops._set_buttons_enabled(True)
 
     def apply_filters(self):
         self.filter_ctrl.apply()

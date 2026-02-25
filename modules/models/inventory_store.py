@@ -36,10 +36,6 @@ class InventoryStore(QObject):
             self.stall.extend(stall_data)
         self.stall_loaded_count += 1
 
-    def all_users_loaded(self):
-        """Все ли пользователи загружены."""
-        return len(self.user_infos) == len(self.api_keys)
-
     def all_stalls_loaded(self):
         """Все ли stall данные загружены."""
         return self.stall_loaded_count >= self.stall_total_count
