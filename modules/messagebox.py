@@ -33,6 +33,7 @@ def styled_message_box(parent=None, title="", text="", icon=QMessageBox.Icon.Inf
             child.setCenterButtons(True)
             break
 
+    Theme.apply_titlebar_theme(msg_box)
     return msg_box
 
 

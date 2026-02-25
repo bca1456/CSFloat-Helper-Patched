@@ -1,48 +1,90 @@
 # modules/theme.py
 
 
+_LIGHT_PALETTE = {
+    "PRIMARY": "#4147D5",
+    "PRIMARY_HOVER": "#3137B5",
+    "PRIMARY_PRESSED": "#2127A5",
+    "PRIMARY_LIGHT": "rgba(65, 71, 213, 0.1)",
+    "PRIMARY_MEDIUM": "rgba(65, 71, 213, 0.9)",
+    "BG_WHITE": "#FFFFFF",
+    "BG_LIGHT": "#F5F9FC",
+    "BG_HOVER": "#EBF3FA",
+    "BG_SELECTION": "#E3F0FF",
+    "BORDER_INPUT": "#D1B3FF",
+    "BORDER_LIGHT": "#C5D9F1",
+    "BORDER_GRID": "#E6E0F2",
+    "TEXT_PRIMARY": "#000000",
+    "TEXT_SECONDARY": "#666666",
+    "TEXT_PLACEHOLDER": "#A0A0A0",
+    "TEXT_WHITE": "white",
+    "HOVER_GRAY": "#E0E0E0",
+    "ERROR": "#FF4444",
+    "SHADOW_RGB": (65, 71, 213),
+}
+
+_DARK_PALETTE = {
+    "PRIMARY": "#F5A623",
+    "PRIMARY_HOVER": "#FFB74D",
+    "PRIMARY_PRESSED": "#F57C00",
+    "PRIMARY_LIGHT": "rgba(245, 166, 35, 0.15)",
+    "PRIMARY_MEDIUM": "rgba(245, 166, 35, 0.8)",
+    "BG_WHITE": "#16181D",
+    "BG_LIGHT": "#1E2028",
+    "BG_HOVER": "#2A2D38",
+    "BG_SELECTION": "#3D2E1A",
+    "BORDER_INPUT": "#343846",
+    "BORDER_LIGHT": "#2A2D38",
+    "BORDER_GRID": "#232630",
+    "TEXT_PRIMARY": "#E6E8F0",
+    "TEXT_SECONDARY": "#8A91A6",
+    "TEXT_PLACEHOLDER": "#5B6178",
+    "TEXT_WHITE": "#FFFFFF",
+    "HOVER_GRAY": "#2A2D38",
+    "ERROR": "#FF5555",
+    "SHADOW_RGB": (245, 166, 35),
+}
+
+_PALETTES = {"light": _LIGHT_PALETTE, "dark": _DARK_PALETTE}
+
+
 class Theme:
     """Единая цветовая схема приложения.
 
-    Все визуальные параметры собраны здесь. Для смены темы
-    достаточно создать подкласс и переопределить нужные атрибуты.
+    Переключение темы: Theme.set_theme("light") / Theme.set_theme("dark").
+    После переключения все @classmethod стили автоматически используют новые цвета.
     """
 
-    # === Основные цвета ===
-    PRIMARY = "#4147D5"
-    PRIMARY_HOVER = "#3137B5"
-    PRIMARY_PRESSED = "#2127A5"
-    PRIMARY_LIGHT = "rgba(65, 71, 213, 0.1)"
-    PRIMARY_MEDIUM = "rgba(65, 71, 213, 0.9)"
+    current_theme = "dark"
 
-    # === Фон ===
-    BG_WHITE = "#FFFFFF"
-    BG_LIGHT = "#F5F9FC"
-    BG_HOVER = "#EBF3FA"
-    BG_SELECTION = "#E3F0FF"
+    # Цвета (перезаписываются в set_theme)
+    PRIMARY = _DARK_PALETTE["PRIMARY"]
+    PRIMARY_HOVER = _DARK_PALETTE["PRIMARY_HOVER"]
+    PRIMARY_PRESSED = _DARK_PALETTE["PRIMARY_PRESSED"]
+    PRIMARY_LIGHT = _DARK_PALETTE["PRIMARY_LIGHT"]
+    PRIMARY_MEDIUM = _DARK_PALETTE["PRIMARY_MEDIUM"]
+
+    BG_WHITE = _DARK_PALETTE["BG_WHITE"]
+    BG_LIGHT = _DARK_PALETTE["BG_LIGHT"]
+    BG_HOVER = _DARK_PALETTE["BG_HOVER"]
+    BG_SELECTION = _DARK_PALETTE["BG_SELECTION"]
     BG_TRANSPARENT = "transparent"
 
-    # === Границы ===
-    BORDER_INPUT = "#D1B3FF"
-    BORDER_LIGHT = "#C5D9F1"
-    BORDER_GRID = "#E6E0F2"
+    BORDER_INPUT = _DARK_PALETTE["BORDER_INPUT"]
+    BORDER_LIGHT = _DARK_PALETTE["BORDER_LIGHT"]
+    BORDER_GRID = _DARK_PALETTE["BORDER_GRID"]
 
-    # === Текст ===
-    TEXT_PRIMARY = "#000000"
-    TEXT_SECONDARY = "#666666"
-    TEXT_PLACEHOLDER = "#A0A0A0"
-    TEXT_WHITE = "white"
+    TEXT_PRIMARY = _DARK_PALETTE["TEXT_PRIMARY"]
+    TEXT_SECONDARY = _DARK_PALETTE["TEXT_SECONDARY"]
+    TEXT_PLACEHOLDER = _DARK_PALETTE["TEXT_PLACEHOLDER"]
+    TEXT_WHITE = _DARK_PALETTE["TEXT_WHITE"]
 
-    # === Состояния ===
-    HOVER_GRAY = "#E0E0E0"
-    TOGGLE_OFF_BG = "#CCCCCC"
-    TOGGLE_OFF_BORDER = "#999999"
-    ERROR = "#FF4444"
+    HOVER_GRAY = _DARK_PALETTE["HOVER_GRAY"]
+    ERROR = _DARK_PALETTE["ERROR"]
 
-    # === Тень кнопок (RGB, без альфа) ===
-    SHADOW_RGB = (65, 71, 213)
+    SHADOW_RGB = _DARK_PALETTE["SHADOW_RGB"]
 
-    # === Шрифт ===
+    # === Шрифт (не зависит от темы) ===
     FONT_FAMILY = "Oswald"
     FONT_SIZE = 11
     FONT_SIZE_SMALL = 10
@@ -53,19 +95,127 @@ class Theme:
     RADIUS = 5
     RADIUS_SMALL = 3
     RADIUS_TOOLTIP = 4
-    RADIUS_TOGGLE = 12
     RADIUS_RARITY = 10
     RADIUS_AVATAR = 14
 
+    @classmethod
+    def set_theme(cls, name):
+        """Переключить тему. name: 'light' или 'dark'."""
+        palette = _PALETTES.get(name, _DARK_PALETTE)
+        for attr, value in palette.items():
+            setattr(cls, attr, value)
+        cls.current_theme = name
+
+    @staticmethod
+    def apply_titlebar_theme(widget):
+        """Применяет тему к titlebar окна (Windows DWM)."""
+        import sys
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+            hwnd = int(widget.winId())
+            is_dark = 1 if Theme.current_theme == "dark" else 0
+            val = ctypes.c_int(is_dark)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(val), ctypes.sizeof(val))
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 19, ctypes.byref(val), ctypes.sizeof(val))
+        except Exception:
+            pass
+
     # =========================================================================
-    # Готовые стили — генерируются из атрибутов выше
+    # Готовые стили
     # =========================================================================
+
+    @classmethod
+    def global_style(cls):
+        return f"""
+            QMainWindow, QDialog, QMessageBox {{
+                background-color: {cls.BG_WHITE};
+            }}
+            QWidget {{
+                color: {cls.TEXT_PRIMARY};
+            }}
+            QLabel, QCheckBox, QRadioButton, QGroupBox, QToolTip {{
+                color: {cls.TEXT_PRIMARY};
+            }}
+            QListView {{
+                background-color: {cls.BG_LIGHT};
+                color: {cls.TEXT_PRIMARY};
+                border: 1px solid {cls.BORDER_LIGHT};
+            }}
+            QListView::item:selected {{
+                background-color: {cls.BG_SELECTION};
+            }}
+            QToolTip {{
+                background-color: {cls.BG_HOVER};
+                border: 1px solid {cls.BORDER_LIGHT};
+                border-radius: {cls.RADIUS_SMALL}px;
+                padding: 4px;
+            }}
+            QScrollBar:vertical {{
+                background-color: transparent;
+                width: 12px;
+                margin: 0px;
+                border: none;
+            }}
+            QScrollBar::handle:vertical {{
+                background-color: {cls.BORDER_INPUT};
+                min-height: 20px;
+                border-radius: 3px;
+                margin: 2px 3px;
+                border: none;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background-color: {cls.PRIMARY};
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0px;
+                border: none;
+                background: none;
+                subcontrol-origin: margin;
+            }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                background: none;
+                border: none;
+            }}
+            QScrollBar:horizontal {{
+                background-color: transparent;
+                height: 12px;
+                margin: 0px;
+                border: none;
+            }}
+            QScrollBar::handle:horizontal {{
+                background-color: {cls.BORDER_INPUT};
+                min-width: 20px;
+                border-radius: 3px;
+                margin: 3px 2px;
+                border: none;
+            }}
+            QScrollBar::handle:horizontal:hover {{
+                background-color: {cls.PRIMARY};
+            }}
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+                width: 0px;
+                border: none;
+                background: none;
+                subcontrol-origin: margin;
+            }}
+            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
+                background: none;
+                border: none;
+            }}
+            QAbstractScrollArea::corner {{
+                background-color: {cls.BG_WHITE};
+            }}
+        """
 
     @classmethod
     def input_style(cls):
         """QLineEdit — фильтры, ввод цены."""
         return f"""
             QLineEdit {{
+                background-color: {cls.BG_LIGHT};
+                color: {cls.TEXT_PRIMARY};
                 border: 1px solid {cls.BORDER_INPUT};
                 border-radius: {cls.RADIUS}px;
                 padding: 2px 10px 2px 5px;
@@ -78,6 +228,8 @@ class Theme:
         """QLineEdit с кастомным placeholder (коллекции)."""
         return f"""
             QLineEdit {{
+                background-color: {cls.BG_LIGHT};
+                color: {cls.TEXT_PRIMARY};
                 border: 1px solid {cls.BORDER_INPUT};
                 border-radius: {cls.RADIUS}px;
                 padding-left: 5px;
@@ -99,6 +251,8 @@ class Theme:
         """QLineEdit в состоянии ошибки."""
         return f"""
             QLineEdit {{
+                background-color: {cls.BG_LIGHT};
+                color: {cls.TEXT_PRIMARY};
                 border: 2px solid {cls.ERROR};
                 border-radius: {cls.RADIUS}px;
                 padding: 5px;
@@ -110,6 +264,8 @@ class Theme:
         """QLineEdit в диалоговых окнах (с увеличенным padding)."""
         return f"""
             QLineEdit {{
+                background-color: {cls.BG_LIGHT};
+                color: {cls.TEXT_PRIMARY};
                 border: 1px solid {cls.BORDER_INPUT};
                 border-radius: {cls.RADIUS}px;
                 padding: 5px;
@@ -143,9 +299,9 @@ class Theme:
         """Вторичная кнопка — отмена."""
         return f"""
             QPushButton {{
-                background-color: {cls.BG_WHITE};
-                color: {cls.PRIMARY};
-                border: 1px solid {cls.BORDER_LIGHT};
+                background-color: {cls.BG_LIGHT};
+                color: {cls.TEXT_PRIMARY};
+                border: 1px solid {cls.BORDER_INPUT};
                 border-radius: {cls.RADIUS}px;
                 font-family: {cls.FONT_FAMILY};
                 font-weight: bold;
@@ -153,7 +309,7 @@ class Theme:
                 padding: 5px 15px;
                 min-width: 80px;
             }}
-            QPushButton:hover {{ background-color: {cls.BG_HOVER}; }}
+            QPushButton:hover {{ background-color: {cls.HOVER_GRAY}; }}
         """
 
     @classmethod
@@ -187,6 +343,9 @@ class Theme:
                 border: 1px solid {cls.BORDER_LIGHT};
                 border-radius: {cls.RADIUS}px;
                 background-color: {cls.BG_LIGHT};
+            }}
+            QScrollArea > QWidget > QWidget {{
+                background-color: transparent;
             }}
         """
 
@@ -230,27 +389,56 @@ class Theme:
         """Стиль для QTableWidget."""
         return f"""
             QTableWidget {{
-                background-color: palette(base);
+                background-color: {cls.BG_WHITE};
+                alternate-background-color: {cls.BG_LIGHT};
                 gridline-color: {cls.BORDER_GRID};
                 selection-background-color: {cls.BG_SELECTION};
                 selection-color: {cls.TEXT_PRIMARY};
-                color: palette(text);
+                color: {cls.TEXT_PRIMARY};
+                border: 1px solid {cls.BORDER_LIGHT};
+                border-radius: {cls.RADIUS}px;
             }}
-            QTableWidget::item {{ padding-left: 0px; }}
+            QTableView {{
+                background-color: {cls.BG_WHITE};
+            }}
+            QTableWidget::item {{ padding-left: 5px; }}
             QTableWidget::item:selected {{ background-color: {cls.BG_SELECTION}; }}
             QTableWidget::item:selected:!active {{ background-color: {cls.BG_SELECTION}; }}
             QTableWidget::item:focus {{ outline: none; }}
-            QHeaderView::section:vertical {{ font-weight: normal; }}
+            QHeaderView::section:vertical {{
+                font-weight: normal;
+                background-color: {cls.BG_LIGHT};
+                color: {cls.TEXT_SECONDARY};
+                border: none;
+                border-right: 1px solid {cls.BORDER_GRID};
+                padding-right: 4px;
+                padding-left: 2px;
+            }}
+            QTableCornerButton::section {{
+                background-color: {cls.BG_LIGHT};
+                border: none;
+                border-right: 1px solid {cls.BORDER_GRID};
+                border-bottom: 2px solid {cls.BORDER_GRID};
+            }}
         """
 
     @classmethod
     def table_header_style(cls):
         """Стиль заголовка таблицы."""
         return f"""
+            QHeaderView {{
+                background-color: {cls.BG_LIGHT};
+                border: none;
+            }}
             QHeaderView::section {{
+                background-color: {cls.BG_LIGHT};
+                color: {cls.PRIMARY};
                 font-family: '{cls.FONT_FAMILY}';
                 font-size: {cls.FONT_SIZE}pt;
                 font-weight: normal;
+                border: none;
+                border-right: 1px solid {cls.BORDER_GRID};
+                border-bottom: 2px solid {cls.BORDER_GRID};
             }}
         """
 
@@ -277,43 +465,8 @@ class Theme:
         )
 
     @classmethod
-    def toggle_on(cls):
-        """ToggleSwitch — включён."""
-        return f"""
-            QPushButton {{
-                background-color: {cls.PRIMARY};
-                border: 2px solid {cls.PRIMARY_HOVER};
-                border-radius: {cls.RADIUS_TOGGLE}px;
-                text-align: right;
-                padding-right: 5px;
-                color: {cls.TEXT_WHITE};
-                font-weight: bold;
-                font-size: {cls.FONT_SIZE_TINY}pt;
-            }}
-        """
-
-    @classmethod
-    def toggle_off(cls):
-        """ToggleSwitch — выключен."""
-        return f"""
-            QPushButton {{
-                background-color: {cls.TOGGLE_OFF_BG};
-                border: 2px solid {cls.TOGGLE_OFF_BORDER};
-                border-radius: {cls.RADIUS_TOGGLE}px;
-                text-align: left;
-                padding-left: 5px;
-                color: {cls.TEXT_SECONDARY};
-                font-weight: bold;
-                font-size: {cls.FONT_SIZE_TINY}pt;
-            }}
-        """
-
-    @classmethod
     def condition_button(cls, position="middle"):
-        """Кнопка состояния (FN/MW/FT/WW/BS).
-
-        position: "first", "middle", "last"
-        """
+        """Кнопка состояния (FN/MW/FT/WW/BS)."""
         if position == "first":
             radius = (
                 f"border-top-left-radius: {cls.RADIUS}px;\n"
@@ -331,11 +484,11 @@ class Theme:
             QPushButton {{
                 border: 1px solid {cls.BORDER_INPUT};
                 {radius}
-                background-color: {cls.BG_WHITE};
-                color: {cls.PRIMARY};
+                background-color: {cls.BG_LIGHT};
+                color: {cls.TEXT_SECONDARY};
             }}
-            QPushButton:checked {{ background-color: {cls.PRIMARY}; color: {cls.BG_WHITE}; }}
-            QPushButton:hover {{ background-color: {cls.HOVER_GRAY}; }}
+            QPushButton:checked {{ background-color: {cls.PRIMARY}; color: {cls.BG_WHITE}; border: 1px solid {cls.PRIMARY}; }}
+            QPushButton:hover:!checked {{ background-color: {cls.HOVER_GRAY}; color: {cls.TEXT_PRIMARY}; }}
         """
 
     @classmethod
@@ -402,7 +555,7 @@ class Theme:
                 font-weight: bold;
             }}
             QPushButton:hover {{
-                background-color: rgba(49, 55, 181, 1);
+                background-color: {cls.PRIMARY_PRESSED};
             }}
         """
 

@@ -159,6 +159,27 @@ def create_condition_buttons(parent, on_toggled_fn):
     return buttons
 
 
+def change_icon_color(icon_path, color_hex):
+    from PyQt6.QtGui import QImage, QPainter, QColor, QPixmap
+    from PyQt6.QtCore import Qt
+
+    image = QImage(icon_path)
+    if image.isNull():
+        return QPixmap()
+
+    image = image.convertToFormat(QImage.Format.Format_ARGB32)
+    color = QColor(color_hex)
+    
+    for y in range(image.height()):
+        for x in range(image.width()):
+            pixel = image.pixelColor(x, y)
+            if pixel.alpha() > 0:
+                color.setAlpha(pixel.alpha())
+                image.setPixelColor(x, y, color)
+                
+    return QPixmap.fromImage(image)
+
+
 def create_action_buttons(parent, icon_path, callbacks):
     """Создаёт кнопки действий и поле ввода цены.
 
@@ -181,7 +202,11 @@ def create_action_buttons(parent, icon_path, callbacks):
     buttons = {}
     for icon_name, x_pos, tooltip, callback in button_configs:
         btn = AnimatedButtonCombo(parent)
-        btn.setIcon(QIcon(os.path.join(icon_path, icon_name)))
+        
+        full_icon_path = os.path.join(icon_path, icon_name)
+        colored_pixmap = change_icon_color(full_icon_path, Theme.PRIMARY)
+        btn.setIcon(QIcon(colored_pixmap))
+        
         btn.setIconSize(QSize(50, 50))
         btn.setFixedSize(50, 50)
         btn.move(x_pos, 20)
@@ -210,8 +235,8 @@ def create_inventory_table(parent, icon_path, on_header_click_fn):
 
     keychain_icon_path = os.path.join(icon_path, "keychain.png")
     if os.path.exists(keychain_icon_path):
-        keychain_icon = QIcon(keychain_icon_path)
-        table.horizontalHeaderItem(COL_KEYCHAINS).setIcon(keychain_icon)
+        colored_pixmap = change_icon_color(keychain_icon_path, Theme.PRIMARY)
+        table.horizontalHeaderItem(COL_KEYCHAINS).setIcon(QIcon(colored_pixmap))
         table.horizontalHeaderItem(COL_KEYCHAINS).setText("")
 
     table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -219,7 +244,6 @@ def create_inventory_table(parent, icon_path, on_header_click_fn):
     table.setSortingEnabled(True)
     table.horizontalHeader().setSectionsClickable(True)
     table.horizontalHeader().setSortIndicatorShown(True)
-    table.horizontalHeader().setStyleSheet(Theme.table_header_color())
 
     for i in range(COLUMN_COUNT):
         if i < 7:

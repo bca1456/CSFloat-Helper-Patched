@@ -57,6 +57,7 @@ class ItemOperations:
     def _show_confirmation_dialog(self, title, items_grouped, action_type="sell"):
         """Диалог подтверждения операции."""
         dialog = QDialog(self.parent_widget)
+        Theme.apply_titlebar_theme(dialog)
         total_items = sum(items_grouped.values())
 
         titles = {
@@ -351,7 +352,6 @@ class ItemOperations:
         if not self._show_confirmation_dialog("Sell Items", grouped, "sell"):
             return
 
-        # Подготовка данных для фонового потока
         descriptions = dict(self.store.account_descriptions)
 
         def _do_sell():
@@ -662,7 +662,6 @@ class ItemOperations:
         if not self._show_confirmation_dialog("Delist Items", grouped, "delist"):
             return
 
-        # Собираем данные для фонового потока (без QPersistentModelIndex)
         delist_api_data = {}
         for api_key, items in items_to_delist.items():
             delist_api_data[api_key] = [item["contract_id"] for item in items]
@@ -816,12 +815,10 @@ class ItemOperations:
         pw = self.parent_widget
         self.table.setSortingEnabled(False)
 
-        # Обновляем все предметы как снятые
         for apikey, items in to_swap.items():
             for it in items:
                 self._update_item_as_unsold_by_asset_id(it["asset_id"])
 
-        # Обновляем как выставленные с новыми listing_id
         successful = []
         for apikey, (items, resp) in results.items():
             listings = resp.get("data", []) if isinstance(resp, dict) else resp
@@ -860,6 +857,7 @@ class ItemOperations:
             return
 
         dialog = QDialog(self.parent_widget)
+        Theme.apply_titlebar_theme(dialog)
         dialog.setWindowTitle("User Information")
 
         layout = QVBoxLayout(dialog)

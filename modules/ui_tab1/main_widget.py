@@ -1,11 +1,13 @@
 # modules/ui_tab1/main_widget.py
 
 import logging
+import os
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QCompleter
 from modules.messagebox import critical
-from PyQt6.QtGui import QCursor
+from PyQt6.QtGui import QCursor, QIcon
 from PyQt6.QtCore import Qt, QSettings, pyqtSignal, pyqtSlot, QEvent, QThreadPool
 
+from modules.theme import Theme
 from modules.api import get_user_info, get_inventory_data, get_stall_data, get_schema
 from modules.workers import ApiWorker, KeepOnlineWorker
 from modules.collections_manager import update_collections_from_schema, get_collections
@@ -18,11 +20,11 @@ from modules.models.columns import (
     DEFAULT_COLUMN_WIDTHS,
 )
 from modules.models.inventory_store import InventoryStore
-from .custom_widgets import CustomToolTip, AccountSettingsDialog
+from .custom_widgets import CustomToolTip, AccountSettingsDialog, ToggleSwitch
 from .ui_components import (
     create_filter_inputs, create_float_filters,
     create_collection_filter, create_rarity_buttons, create_condition_buttons,
-    create_action_buttons, create_inventory_table,
+    create_action_buttons, create_inventory_table, change_icon_color,
 )
 from .filters import FilterController
 from .table_population import TablePopulator
@@ -164,6 +166,78 @@ class Tab1(QWidget):
 
         self.load_column_widths()
 
+        self.theme_switch = ToggleSwitch(self, show_text=False, size=(28, 14))
+        self.theme_switch.setChecked(Theme.current_theme == "dark")
+        self.theme_switch.toggled_signal.connect(self._on_theme_toggle)
+        self._position_theme_switch()
+
+    def _on_theme_toggle(self, checked):
+        self.window().switch_theme()
+
+    def _position_theme_switch(self):
+        if hasattr(self, 'theme_switch'):
+            self.theme_switch.move(self.width() - 40, self.height() - 24)
+
+    def refresh_styles(self):
+        """Переприменить стили всех виджетов после смены темы."""
+        from modules.models.columns import COL_KEYCHAINS
+        from .constants import RARITY_COLOR_MAP
+
+        # Фильтры
+        self.name_filter.setStyleSheet(Theme.input_style())
+        self.sticker_filter.setStyleSheet(Theme.input_style())
+        self.float_min_filter.setStyleSheet(Theme.input_style())
+        self.float_max_filter.setStyleSheet(Theme.input_style())
+        self.collection_edit.setStyleSheet(Theme.input_style_with_placeholder())
+        self.dropdown_button.setStyleSheet(Theme.dropdown_button())
+        self.price_input.setStyleSheet(Theme.input_style())
+
+        # Кнопки условий
+        labels = ["FN", "MW", "FT", "WW", "BS"]
+        for i, btn in enumerate(self.condition_buttons):
+            if i == 0:
+                pos = "first"
+            elif i == len(labels) - 1:
+                pos = "last"
+            else:
+                pos = "middle"
+            btn.setStyleSheet(Theme.condition_button(pos))
+
+        # Кнопки редкости
+        rarities = list(RARITY_COLOR_MAP.keys())
+        for i, btn in enumerate(self.rarity_buttons):
+            if i < len(rarities):
+                btn.setStyleSheet(Theme.rarity_button(RARITY_COLOR_MAP[rarities[i]]))
+
+        # Иконки действий
+        icon_map = {
+            "sell": "sell.png",
+            "change_price": "change.png",
+            "delist": "delist.png",
+            "relist": "swap.png",
+            "user_info": "info.png",
+        }
+        for key, btn in self.action_buttons.items():
+            icon_file = icon_map.get(key)
+            if icon_file:
+                full_path = os.path.join(self.icon_path, icon_file)
+                colored = change_icon_color(full_path, Theme.PRIMARY)
+                btn.setIcon(QIcon(colored))
+
+        # Таблица
+        self.inventory_table.setStyleSheet(Theme.table_style())
+        self.inventory_table.horizontalHeader().setStyleSheet(Theme.table_header_style())
+
+        # Иконка keychain в заголовке
+        keychain_path = os.path.join(self.icon_path, "keychain.png")
+        if os.path.exists(keychain_path):
+            colored = change_icon_color(keychain_path, Theme.PRIMARY)
+            self.inventory_table.horizontalHeaderItem(COL_KEYCHAINS).setIcon(QIcon(colored))
+
+        # Тултип
+        self.tooltip.setStyleSheet(Theme.tooltip_style())
+        self.theme_switch.update()
+
     def eventFilter(self, obj, event):
         from PyQt6.QtWidgets import QWidget
 
@@ -190,14 +264,14 @@ class Tab1(QWidget):
         return super().eventFilter(obj, event)
 
     def resizeEvent(self, event):
-        """Растягиваем таблицу при изменении размера окна."""
         super().resizeEvent(event)
 
         if hasattr(self, 'inventory_table'):
-            new_table_height = self.height() - 132 - 20
-
+            new_table_height = self.height() - 132 - 34
             if new_table_height >= 620:
                 self.inventory_table.setFixedHeight(new_table_height)
+
+        self._position_theme_switch()
 
     def load_data(self, threadpool):
         """Load data from API."""

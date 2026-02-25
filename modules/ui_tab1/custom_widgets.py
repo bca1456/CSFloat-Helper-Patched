@@ -4,8 +4,8 @@ from PyQt6.QtWidgets import (
     QFrame, QVBoxLayout, QLabel, QDialog, QFormLayout,
     QPushButton, QHBoxLayout, QLineEdit
 )
-from PyQt6.QtCore import Qt, QPoint, pyqtSignal
-from PyQt6.QtGui import QCursor, QFont
+from PyQt6.QtCore import Qt, QPoint, pyqtSignal, pyqtProperty, QPropertyAnimation, QRectF
+from PyQt6.QtGui import QCursor, QFont, QPainter, QPainterPath, QColor, QBrush, QPen
 
 from modules.theme import Theme
 from modules.utils import key_id
@@ -46,28 +46,77 @@ class ToggleSwitch(QPushButton):
 
     toggled_signal = pyqtSignal(bool)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, show_text=True, size=None):
         super().__init__(parent)
         self.setCheckable(True)
-        self.setFixedSize(50, 24)
-        self._update_style()
+        self._show_text = show_text
+        w, h = size or (50, 24)
+        self.setFixedSize(w, h)
+        self._radius = h / 2
+        self._circle_position = 2.0
         self.clicked.connect(self._on_click)
 
-    def _on_click(self):
-        self._update_style()
-        self.toggled_signal.emit(self.isChecked())
+    @pyqtProperty(float)
+    def circle_position(self):
+        return self._circle_position
 
-    def _update_style(self):
-        if self.isChecked():
-            self.setStyleSheet(Theme.toggle_on())
-            self.setText("ON")
-        else:
-            self.setStyleSheet(Theme.toggle_off())
-            self.setText("OFF")
+    @circle_position.setter
+    def circle_position(self, pos):
+        self._circle_position = pos
+        self.update()
+
+    def _on_click(self):
+        self.toggled_signal.emit(self.isChecked())
+        self._animate()
 
     def setChecked(self, checked: bool):
         super().setChecked(checked)
-        self._update_style()
+        self._circle_position = (self.width() - self.height() + 2) if checked else 2.0
+        self.update()
+
+    def _animate(self):
+        self.anim = QPropertyAnimation(self, b"circle_position")
+        self.anim.setDuration(150)
+        self.anim.setEndValue(float(self.width() - self.height() + 2) if self.isChecked() else 2.0)
+        self.anim.start()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        if self.isChecked():
+            bg_color = QColor(Theme.PRIMARY)
+            circle_color = QColor(Theme.TEXT_WHITE)
+            text = "ON" if self._show_text else ""
+        else:
+            if Theme.current_theme == "dark":
+                bg_color = QColor(Theme.BG_LIGHT).lighter(150)
+                circle_color = QColor(Theme.TEXT_SECONDARY)
+            else:
+                bg_color = QColor(Theme.TEXT_SECONDARY)
+                circle_color = QColor(Theme.TEXT_WHITE)
+            text = "OFF" if self._show_text else ""
+
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(0, 0, self.width(), self.height()), self._radius, self._radius)
+        painter.fillPath(path, QBrush(bg_color))
+
+        circle_rect = QRectF(self._circle_position, 2.0, self.height() - 4.0, self.height() - 4.0)
+        painter.setBrush(QBrush(circle_color))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(circle_rect)
+
+        if text:
+            painter.setPen(QPen(QColor(Theme.TEXT_WHITE if self.isChecked() else Theme.TEXT_SECONDARY)))
+            font = self.font()
+            font.setPointSize(Theme.FONT_SIZE_TINY)
+            font.setBold(True)
+            painter.setFont(font)
+            
+            if self.isChecked():
+                painter.drawText(QRectF(0, 0, self.width() - self.height() + 2, self.height()), Qt.AlignmentFlag.AlignCenter, text)
+            else:
+                painter.drawText(QRectF(self.height() - 2, 0, self.width() - self.height() + 2, self.height()), Qt.AlignmentFlag.AlignCenter, text)
 
 
 class AccountSettingsDialog(QDialog):
@@ -83,6 +132,7 @@ class AccountSettingsDialog(QDialog):
         self.setWindowTitle("Account Settings")
         self.setMinimumWidth(350)
         self.setModal(True)
+        Theme.apply_titlebar_theme(self)
 
         self.current_keep_online = self.settings.value(
             f"account_{key_id(api_key)}_keep_online", False, type=bool

@@ -20,12 +20,16 @@ class SteamInventoryApp(QMainWindow):
         self.initUI()
 
     def initUI(self):
+        saved_theme = self.settings.value("theme", "dark", type=str)
+        Theme.set_theme(saved_theme)
+
         appfont = QFont(Theme.FONT_FAMILY)
         appfont.setPointSize(Theme.FONT_SIZE)
         appfont.setWeight(QFont.Weight.Normal)
         self.setFont(appfont)
 
-        self.setWindowIcon(QIcon(os.path.join(self.iconpath, "steam.png")))
+        self.setStyleSheet(Theme.global_style())
+
         self.setWindowTitle("CSFloat Helper")
 
         self.tab1 = Tab1(self.api_keys, self.iconpath, parent=self)
@@ -42,7 +46,6 @@ class SteamInventoryApp(QMainWindow):
         self.setFixedWidth(fixed_width)
         self.setMinimumHeight(fixed_height)
 
-        # Загружаем сохранённую высоту и позицию
         saved_height = self.settings.value("window_height", fixed_height, type=int)
         saved_x = self.settings.value("window_x", -1, type=int)
         saved_y = self.settings.value("window_y", -1, type=int)
@@ -60,6 +63,8 @@ class SteamInventoryApp(QMainWindow):
         else:
             self.center_window()
 
+        self.setWindowIcon(QIcon(os.path.join(self.iconpath, "steam.png")))
+        self._update_native_titlebar()
         self.show()
         self.load_data()
 
@@ -88,22 +93,28 @@ class SteamInventoryApp(QMainWindow):
 
         self.move(x, y)
 
+    def switch_theme(self):
+        """Переключить тему light <-> dark."""
+        new_theme = "light" if Theme.current_theme == "dark" else "dark"
+        Theme.set_theme(new_theme)
+        self.settings.setValue("theme", new_theme)
+        self.setStyleSheet(Theme.global_style())
+        self.tab1.refresh_styles()
+        self._update_native_titlebar()
+
+    def _update_native_titlebar(self):
+        Theme.apply_titlebar_theme(self)
+
     def load_data(self):
         self.tab1.load_data(self.threadpool)
 
     def closeEvent(self, event):
-        # Останавливаем фоновые потоки
         self.tab1.cleanup()
-
-        # Сохраняем настройки перед закрытием
         self.tab1.save_column_widths()
 
-        # Сохраняем текущие размеры и позицию окна
         self.settings.setValue("window_height", self.height())
         self.settings.setValue("window_x", self.x())
         self.settings.setValue("window_y", self.y())
-
-        # Синхронизируем настройки
         self.settings.sync()
 
         event.accept()
