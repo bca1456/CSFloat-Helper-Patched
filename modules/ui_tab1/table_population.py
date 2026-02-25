@@ -2,9 +2,9 @@
 
 import os
 import re
-from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLabel, QTableWidgetItem, QApplication
+from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLabel, QTableWidgetItem
 from PyQt6.QtGui import QPixmap, QIcon, QColor, QBrush, QPainter
-from PyQt6.QtCore import Qt, QEventLoop
+from PyQt6.QtCore import Qt, QTimer
 from modules.utils import cache_image_async, calculate_days_on_sale
 from modules.theme import Theme
 from modules.models.columns import (
@@ -73,74 +73,98 @@ def create_price_widget(price_cents, icon_path):
 
 
 class TablePopulator:
-    """Заполнение таблицы инвентаря."""
+    """Заполнение таблицы инвентаря через асинхронные батчи."""
+
+    BATCH_SIZE = 100
 
     def __init__(self, table, icon_path, event_filter_target):
         self.table = table
         self.icon_path = icon_path
         self.event_filter_target = event_filter_target
         self.asset_index = {}
+        self._queue = []
+        self._pending = []
+        self._processing = False
+        self.on_finished = None
 
     def populate(self, inventory, stall):
         """Заполняет таблицу с нуля."""
         self.asset_index = {}
+        self._queue.clear()
+        self._pending.clear()
+        self._processing = False
         self.table.setRowCount(0)
-        self.table.setSortingEnabled(False)
-        self._add_items(inventory, stall)
-        self.table.setSortingEnabled(True)
+        self._enqueue(inventory, stall)
 
     def append(self, inventory, stall):
-        """Добавляет предметы в таблицу без очистки."""
-        was_sorting = self.table.isSortingEnabled()
-        self.table.setSortingEnabled(False)
-        self._add_items(inventory, stall)
-        self.table.setSortingEnabled(was_sorting)
+        """Добавляет предметы в таблицу (через очередь)."""
+        self._enqueue(inventory, stall)
 
-    def _add_items(self, inventory, stall):
-        """Добавляет строки в таблицу батчами."""
+    def _enqueue(self, inventory, stall):
+        self._queue.append((inventory, stall))
+        if not self._processing:
+            self._start_next()
+
+    def _start_next(self):
+        if not self._queue:
+            self._processing = False
+            if self.on_finished:
+                self.on_finished()
+            return
+
+        self._processing = True
+        inventory, stall = self._queue.pop(0)
+
         stall_dict = {}
         for st in (stall or []):
             asset_id = st.get("item", {}).get("asset_id")
             if asset_id:
                 stall_dict[asset_id] = st
 
-        batch_size = 100
-        total_items = len(inventory)
+        self._pending = [(item, stall_dict) for item in inventory]
+        self._process_batch()
 
-        for batch_start in range(0, total_items, batch_size):
-            batch_end = min(batch_start + batch_size, total_items)
-            batch_items = inventory[batch_start:batch_end]
+    def _process_batch(self):
+        batch = self._pending[:self.BATCH_SIZE]
+        self._pending = self._pending[self.BATCH_SIZE:]
 
-            for item in batch_items:
-                row = self.table.rowCount()
-                self.table.insertRow(row)
+        for item, stall_dict in batch:
+            self._add_single_row(item, stall_dict)
 
-                asset_id = str(item.get("asset_id", ""))
-                market_hash_name = item.get("market_hash_name", "")
+        if self._pending:
+            QTimer.singleShot(0, self._process_batch)
+        else:
+            self._start_next()
 
-                rarity_value = int(item.get("rarity", 1)) or 1
-                color = RARITY_COLOR_MAP.get(rarity_value, QColor("white"))
-                color_icon = create_color_icon(color)
+    def _add_single_row(self, item, stall_dict):
+        """Добавляет одну строку в таблицу."""
+        row = self.table.rowCount()
+        self.table.insertRow(row)
 
-                name_item = QTableWidgetItem(market_hash_name)
-                name_item.setIcon(color_icon)
-                name_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
-                self.table.setItem(row, COL_NAME, name_item)
+        asset_id = str(item.get("asset_id", ""))
+        market_hash_name = item.get("market_hash_name", "")
 
-                self._populate_stickers(row, item)
-                self._populate_keychains(row, item)
-                self._populate_float(row, item)
-                self._populate_seed(row, item)
+        rarity_value = int(item.get("rarity", 1)) or 1
+        color = RARITY_COLOR_MAP.get(rarity_value, QColor("white"))
+        color_icon = create_color_icon(color)
 
-                stall_item = stall_dict.get(asset_id)
-                if stall_item:
-                    self._populate_stall_data(row, stall_item)
-                else:
-                    self._populate_empty_stall_data(row)
+        name_item = QTableWidgetItem(market_hash_name)
+        name_item.setIcon(color_icon)
+        name_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+        self.table.setItem(row, COL_NAME, name_item)
 
-                self._populate_hidden_columns(row, item, asset_id, market_hash_name)
+        self._populate_stickers(row, item)
+        self._populate_keychains(row, item)
+        self._populate_float(row, item)
+        self._populate_seed(row, item)
 
-            QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+        stall_item = stall_dict.get(asset_id)
+        if stall_item:
+            self._populate_stall_data(row, stall_item)
+        else:
+            self._populate_empty_stall_data(row)
+
+        self._populate_hidden_columns(row, item, asset_id, market_hash_name)
 
     def _populate_icon_cells(self, row, item, field, column):
         """Заполняет ячейку с иконками (стикеры/брелки) с асинхронной загрузкой."""

@@ -148,6 +148,7 @@ class Tab1(QWidget):
         self.populator = TablePopulator(
             self.inventory_table, self.icon_path, self,
         )
+        self.populator.on_finished = self._check_loading_complete
 
         self.ops = ItemOperations(
             self.inventory_table, self.store, self.icon_path,
@@ -353,9 +354,7 @@ class Tab1(QWidget):
         critical(self, "API Error", f"An error occurred while fetching data:\n{e}")
 
         self.store.add_stall_result([])
-        if self.store.all_stalls_loaded():
-            self.inventory_table.setSortingEnabled(True)
-            self.ops._set_buttons_enabled(True)
+        self._check_loading_complete()
 
     def fetch_stall_data(self, api_key, steam_id):
         """Fetch stall data."""
@@ -375,10 +374,6 @@ class Tab1(QWidget):
         account_inventory = [item for item in self.store.inventory if item.get("api_key") == api_key]
         self.populator.append(account_inventory, stall_data)
 
-        if self.store.all_stalls_loaded():
-            self.inventory_table.setSortingEnabled(True)
-            self.ops._set_buttons_enabled(True)
-
     @pyqtSlot(tuple)
     def handle_stall_error(self, error):
         """Handle stall data error."""
@@ -386,8 +381,11 @@ class Tab1(QWidget):
         logging.error(f"Stall Data Error: {e}\n{tb}")
 
         self.store.add_stall_result([])
+        self._check_loading_complete()
 
-        if self.store.all_stalls_loaded():
+    def _check_loading_complete(self):
+        """Включает UI когда все данные загружены и вставлены в таблицу."""
+        if self.store.all_stalls_loaded() and not self.populator._processing:
             self.inventory_table.setSortingEnabled(True)
             self.ops._set_buttons_enabled(True)
 
