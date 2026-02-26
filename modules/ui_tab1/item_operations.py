@@ -18,7 +18,6 @@ from modules.utils import cache_image_async
 from modules.messagebox import warning, information
 from modules.theme import Theme
 from modules.models.inventory_store import InventoryStore
-from .table_population import create_price_widget
 from modules.models.columns import (
     COL_NAME, COL_STICKERS, COL_KEYCHAINS, COL_FLOAT, COL_SEED,
     COL_DAYS, COL_PRICE, COL_LISTING_ID, COL_ASSET_ID, COL_CREATED_AT,
@@ -221,7 +220,9 @@ class ItemOperations:
         days_item = QTableWidgetItem("0d 0h")
         self.table.setItem(row, COL_DAYS, days_item)
 
-        self.table.setCellWidget(row, COL_PRICE, create_price_widget(price_cents, self.icon_path))
+        price_item = QTableWidgetItem()
+        price_item.setData(Qt.ItemDataRole.UserRole, price_cents)
+        self.table.setItem(row, COL_PRICE, price_item)
 
         listing_item = QTableWidgetItem(str(listing_id))
         self.table.setItem(row, COL_LISTING_ID, listing_item)
@@ -240,7 +241,9 @@ class ItemOperations:
         if row == -1:
             return
 
-        self.table.setCellWidget(row, COL_PRICE, create_price_widget(new_price_cents, self.icon_path))
+        price_item = self.table.item(row, COL_PRICE)
+        if price_item:
+            price_item.setData(Qt.ItemDataRole.UserRole, new_price_cents)
 
         pv_item = QTableWidgetItem()
         pv_item.setData(Qt.ItemDataRole.DisplayRole, new_price_cents)
@@ -251,10 +254,9 @@ class ItemOperations:
         """Обновляет строку после снятия с продажи."""
         self.table.setItem(row, COL_DAYS, QTableWidgetItem(""))
 
-        empty_price = QWidget()
-        empty_price.setStyleSheet(Theme.transparent_widget())
-        empty_price.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.table.setCellWidget(row, COL_PRICE, empty_price)
+        price_item = self.table.item(row, COL_PRICE)
+        if price_item:
+            price_item.setData(Qt.ItemDataRole.UserRole, None)
 
         self.table.setItem(row, COL_LISTING_ID, QTableWidgetItem(""))
         self.table.setItem(row, COL_CREATED_AT, QTableWidgetItem(""))
@@ -450,28 +452,13 @@ class ItemOperations:
             if not listing_id_it or not listing_id_it.text():
                 continue
 
-            price_widget = self.table.cellWidget(row, COL_PRICE)
-            if not price_widget:
+            pv_it = self.table.item(row, COL_PRICE_VALUE)
+            if not pv_it:
                 continue
-
-            layout = price_widget.layout()
-            if not layout:
+            price_cents = pv_it.data(Qt.ItemDataRole.UserRole)
+            if price_cents is None:
                 continue
-
-            current_price_label = None
-            for i in range(layout.count()):
-                w = layout.itemAt(i).widget()
-                if isinstance(w, QLabel) and "$" in w.text():
-                    current_price_label = w
-                    break
-
-            if not current_price_label:
-                continue
-
-            try:
-                current_price = float(current_price_label.text().strip().replace("$", "").strip())
-            except Exception:
-                continue
+            current_price = price_cents / 100
 
             new_price_cents = self._calculate_new_price(price_input, current_price)
             if new_price_cents is None:

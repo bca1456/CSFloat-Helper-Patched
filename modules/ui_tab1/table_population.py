@@ -2,11 +2,10 @@
 
 import os
 import re
-from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLabel, QTableWidgetItem
+from PyQt6.QtWidgets import QTableWidgetItem
 from PyQt6.QtGui import QPixmap, QIcon, QColor, QBrush, QPainter
 from PyQt6.QtCore import Qt, QTimer
 from modules.utils import cache_image_async, calculate_days_on_sale
-from modules.theme import Theme
 from modules.models.columns import (
     COL_NAME, COL_STICKERS, COL_KEYCHAINS, COL_FLOAT, COL_SEED,
     COL_DAYS, COL_PRICE, COL_LISTING_ID, COL_ASSET_ID, COL_CREATED_AT,
@@ -48,39 +47,14 @@ def create_color_icon(color: QColor, width: int = 5, height: int = 30) -> QIcon:
     return QIcon(pixmap)
 
 
-def create_price_widget(price_cents, icon_path):
-    """Создаёт виджет цены с логотипом CSFloat."""
-    price_widget = QWidget()
-    lay = QHBoxLayout(price_widget)
-    lay.setContentsMargins(0, 0, 0, 0)
-    lay.setSpacing(4)
-
-    logo = QLabel()
-    logo_path = os.path.join(icon_path, "csfloat_logo.png")
-    if os.path.exists(logo_path):
-        logo.setPixmap(QPixmap(logo_path).scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio))
-        logo.setStyleSheet(Theme.transparent_widget())
-        lay.addWidget(logo)
-
-    price_label = QLabel(f"${price_cents / 100:.2f}")
-    price_label.setStyleSheet(Theme.transparent_widget())
-    lay.addWidget(price_label)
-    lay.addStretch(1)
-
-    price_widget.setStyleSheet(Theme.transparent_widget())
-    price_widget.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-    return price_widget
-
-
 class TablePopulator:
     """Заполнение таблицы инвентаря через асинхронные батчи."""
 
     BATCH_SIZE = 100
 
-    def __init__(self, table, icon_path, event_filter_target):
+    def __init__(self, table, icon_path):
         self.table = table
         self.icon_path = icon_path
-        self.event_filter_target = event_filter_target
         self.asset_index = {}
         self._queue = []
         self._pending = []
@@ -167,50 +141,52 @@ class TablePopulator:
         self._populate_hidden_columns(row, item, asset_id, market_hash_name)
 
     def _populate_icon_cells(self, row, item, field, column):
-        """Заполняет ячейку с иконками (стикеры/брелки) с асинхронной загрузкой."""
+        """Заполняет ячейку с данными иконок для делегата."""
         entries = item.get(field, []) or []
-        layout = QHBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(2)
+        asset_id = str(item.get("asset_id", ""))
+        icon_data = []
 
         for entry in entries:
             icon_url = entry.get("icon_url")
             if not icon_url:
                 continue
 
-            lbl = QLabel()
-            lbl.setFixedSize(20, 20)
-
             name = entry.get("name", "Unknown")
             pattern = entry.get("pattern", "")
-            lbl._tooltip_text = f"{name}\n#{pattern}" if pattern else name
+            tooltip = f"{name}\n#{pattern}" if pattern else name
 
-            lbl.setMouseTracking(True)
-            lbl.installEventFilter(self.event_filter_target)
-            lbl.setStyleSheet("")
+            icon_data.append({"name": name, "tooltip": tooltip, "pixmap": None})
 
-            def create_callback(label):
+            idx = len(icon_data) - 1
+
+            def _make_cb(aid, col, i):
                 def on_loaded(path):
-                    if path and os.path.exists(path):
-                        pixmap = QPixmap(path)
-                        if not pixmap.isNull():
-                            label.setPixmap(pixmap.scaled(
-                                20, 20,
-                                Qt.AspectRatioMode.KeepAspectRatio,
-                                Qt.TransformationMode.SmoothTransformation
-                            ))
+                    if not path or not os.path.exists(path):
+                        return
+                    pm = QPixmap(path).scaled(
+                        20, 20,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                    # Ищем актуальную строку через asset_index
+                    asset_item = self.asset_index.get(aid)
+                    if not asset_item:
+                        return
+                    actual_row = asset_item.row()
+                    it = self.table.item(actual_row, col)
+                    if not it:
+                        return
+                    data = it.data(Qt.ItemDataRole.UserRole)
+                    if data and i < len(data):
+                        data[i]["pixmap"] = pm
+                        self.table.viewport().update()
                 return on_loaded
 
-            cache_image_async(icon_url, create_callback(lbl))
-            layout.addWidget(lbl)
+            cache_image_async(icon_url, _make_cb(asset_id, column, idx))
 
-        layout.addStretch(1)
-
-        widget = QWidget()
-        widget.setLayout(layout)
-        widget.setStyleSheet(Theme.transparent_widget())
-        widget.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.table.setCellWidget(row, column, widget)
+        cell_item = QTableWidgetItem()
+        cell_item.setData(Qt.ItemDataRole.UserRole, icon_data if icon_data else None)
+        self.table.setItem(row, column, cell_item)
 
     def _populate_stickers(self, row, item):
         """Заполняет стикеры."""
@@ -243,7 +219,9 @@ class TablePopulator:
         self.table.setItem(row, COL_DAYS, days_item)
 
         price_cents = int(stall_item.get("price", 0)) or 0
-        self.table.setCellWidget(row, COL_PRICE, create_price_widget(price_cents, self.icon_path))
+        price_item = QTableWidgetItem()
+        price_item.setData(Qt.ItemDataRole.UserRole, price_cents)
+        self.table.setItem(row, COL_PRICE, price_item)
 
         listing_id_item = QTableWidgetItem(str(stall_item.get("id", "")))
         self.table.setItem(row, COL_LISTING_ID, listing_id_item)
@@ -259,12 +237,7 @@ class TablePopulator:
     def _populate_empty_stall_data(self, row):
         """Заполняет пустые ячейки для предметов не на продаже."""
         self.table.setItem(row, COL_DAYS, QTableWidgetItem(""))
-
-        empty_price = QWidget()
-        empty_price.setStyleSheet(Theme.transparent_widget())
-        empty_price.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.table.setCellWidget(row, COL_PRICE, empty_price)
-
+        self.table.setItem(row, COL_PRICE, QTableWidgetItem())
         self.table.setItem(row, COL_LISTING_ID, QTableWidgetItem(""))
         self.table.setItem(row, COL_CREATED_AT, QTableWidgetItem(""))
         self.table.setItem(row, COL_PRICE_VALUE, QTableWidgetItem(""))

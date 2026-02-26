@@ -1,7 +1,6 @@
 # modules/ui_tab1/filters.py
 
-from PyQt6.QtCore import QObject, pyqtSlot
-from PyQt6.QtWidgets import QLabel
+from PyQt6.QtCore import QObject, Qt, pyqtSlot
 from modules.models.columns import (
     COL_NAME, COL_FLOAT, COL_RARITY, COL_WEAR, COL_STICKERS, COL_COLLECTION,
 )
@@ -86,14 +85,12 @@ class FilterController(QObject):
             wear_item = self.table.item(row, COL_WEAR)
             wear_val = wear_item.text() if wear_item else "N/A"
 
-            stickers_widget = self.table.cellWidget(row, COL_STICKERS)
+            sticker_item = self.table.item(row, COL_STICKERS)
             sticker_names = ""
-            if stickers_widget and stickers_widget.layout():
-                lay = stickers_widget.layout()
-                for i in range(lay.count()):
-                    w = lay.itemAt(i).widget()
-                    if isinstance(w, QLabel) and hasattr(w, '_tooltip_text'):
-                        sticker_names += w._tooltip_text.lower()
+            if sticker_item:
+                sticker_data = sticker_item.data(Qt.ItemDataRole.UserRole)
+                if sticker_data:
+                    sticker_names = " ".join(s["name"].lower() for s in sticker_data)
 
             matches_name = name_filter in name_txt
             matches_sticker = sticker_filter in sticker_names

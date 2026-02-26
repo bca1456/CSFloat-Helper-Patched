@@ -4,8 +4,8 @@ import logging
 import os
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QCompleter
 from modules.messagebox import critical
-from PyQt6.QtGui import QCursor, QIcon
-from PyQt6.QtCore import Qt, QSettings, pyqtSignal, pyqtSlot, QEvent, QThreadPool
+from PyQt6.QtGui import QIcon
+from PyQt6.QtCore import Qt, QSettings, pyqtSignal, pyqtSlot, QThreadPool
 
 from modules.theme import Theme
 from modules.api import get_user_info, get_inventory_data, get_stall_data, get_schema
@@ -29,6 +29,7 @@ from .ui_components import (
 from .filters import FilterController
 from .table_population import TablePopulator
 from .item_operations import ItemOperations
+from .delegates import PriceDelegate, IconDelegate
 
 
 class Tab1(QWidget):
@@ -145,8 +146,15 @@ class Tab1(QWidget):
             self, self.icon_path, self.handle_header_click,
         )
 
+        self._price_delegate = PriceDelegate(self.icon_path, self.inventory_table)
+        self._sticker_delegate = IconDelegate(self.tooltip, self.inventory_table)
+        self._keychain_delegate = IconDelegate(self.tooltip, self.inventory_table)
+        self.inventory_table.setItemDelegateForColumn(COL_PRICE, self._price_delegate)
+        self.inventory_table.setItemDelegateForColumn(COL_STICKERS, self._sticker_delegate)
+        self.inventory_table.setItemDelegateForColumn(COL_KEYCHAINS, self._keychain_delegate)
+
         self.populator = TablePopulator(
-            self.inventory_table, self.icon_path, self,
+            self.inventory_table, self.icon_path,
         )
         self.populator.on_finished = self._check_loading_complete
 
@@ -236,34 +244,12 @@ class Tab1(QWidget):
             colored = change_icon_color(keychain_path, Theme.PRIMARY)
             self.inventory_table.horizontalHeaderItem(COL_KEYCHAINS).setIcon(QIcon(colored))
 
+        # Делегаты — перерисовка с новыми цветами
+        self.inventory_table.viewport().update()
+
         # Тултип
         self.tooltip.setStyleSheet(Theme.tooltip_style())
         self.theme_switch.update()
-
-    def eventFilter(self, obj, event):
-        from PyQt6.QtWidgets import QWidget
-
-        if isinstance(obj, QWidget) and hasattr(obj, '_tooltip_text'):
-            et = event.type()
-
-            if et == QEvent.Type.ToolTip:
-                try:
-                    gp = event.globalPosition().toPoint()
-                except AttributeError:
-                    gp = QCursor.pos()
-
-                self.tooltip.show_text(getattr(obj, '_tooltip_text', ''), gp)
-                return True
-
-            if et == QEvent.Type.MouseMove:
-                self.tooltip.move_to_cursor()
-                return False
-
-            if et == QEvent.Type.Leave:
-                self.tooltip.hide()
-                return False
-
-        return super().eventFilter(obj, event)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
