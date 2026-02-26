@@ -94,6 +94,8 @@ class IconDelegate(QStyledItemDelegate):
         if event.type() == QEvent.Type.ToolTip:
             icons = index.data(Qt.ItemDataRole.UserRole)
             if not icons:
+                if self._tooltip_widget:
+                    self._tooltip_widget.hide()
                 return False
 
             mouse_x = event.pos().x() - option.rect.x() - 2
@@ -109,7 +111,7 @@ class IconDelegate(QStyledItemDelegate):
                     self._tooltip_widget.show_text(tooltip, gp)
                     return True
 
-        if event.type() == QEvent.Type.Leave and self._tooltip_widget:
-            self._tooltip_widget.hide()
+            if self._tooltip_widget:
+                self._tooltip_widget.hide()
 
         return super().helpEvent(event, view, option, index)

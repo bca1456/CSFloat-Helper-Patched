@@ -5,7 +5,7 @@ import os
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QCompleter
 from modules.messagebox import critical
 from PyQt6.QtGui import QIcon
-from PyQt6.QtCore import Qt, QSettings, pyqtSignal, pyqtSlot, QThreadPool
+from PyQt6.QtCore import Qt, QSettings, pyqtSignal, pyqtSlot, QEvent, QThreadPool
 
 from modules.theme import Theme
 from modules.api import get_user_info, get_inventory_data, get_stall_data, get_schema
@@ -152,6 +152,7 @@ class Tab1(QWidget):
         self.inventory_table.setItemDelegateForColumn(COL_PRICE, self._price_delegate)
         self.inventory_table.setItemDelegateForColumn(COL_STICKERS, self._sticker_delegate)
         self.inventory_table.setItemDelegateForColumn(COL_KEYCHAINS, self._keychain_delegate)
+        self.inventory_table.viewport().installEventFilter(self)
 
         self.populator = TablePopulator(
             self.inventory_table, self.icon_path,
@@ -250,6 +251,13 @@ class Tab1(QWidget):
         # Тултип
         self.tooltip.setStyleSheet(Theme.tooltip_style())
         self.theme_switch.update()
+
+    def eventFilter(self, obj, event):
+        if obj is self.inventory_table.viewport():
+            et = event.type()
+            if et in (QEvent.Type.Leave, QEvent.Type.Wheel):
+                self.tooltip.hide()
+        return super().eventFilter(obj, event)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

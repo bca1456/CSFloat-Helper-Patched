@@ -143,7 +143,6 @@ class TablePopulator:
     def _populate_icon_cells(self, row, item, field, column):
         """Заполняет ячейку с данными иконок для делегата."""
         entries = item.get(field, []) or []
-        asset_id = str(item.get("asset_id", ""))
         icon_data = []
 
         for entry in entries:
@@ -159,7 +158,7 @@ class TablePopulator:
 
             idx = len(icon_data) - 1
 
-            def _make_cb(aid, col, i):
+            def _make_cb(data_list, i):
                 def on_loaded(path):
                     if not path or not os.path.exists(path):
                         return
@@ -168,21 +167,12 @@ class TablePopulator:
                         Qt.AspectRatioMode.KeepAspectRatio,
                         Qt.TransformationMode.SmoothTransformation,
                     )
-                    # Ищем актуальную строку через asset_index
-                    asset_item = self.asset_index.get(aid)
-                    if not asset_item:
-                        return
-                    actual_row = asset_item.row()
-                    it = self.table.item(actual_row, col)
-                    if not it:
-                        return
-                    data = it.data(Qt.ItemDataRole.UserRole)
-                    if data and i < len(data):
-                        data[i]["pixmap"] = pm
+                    if i < len(data_list):
+                        data_list[i]["pixmap"] = pm
                         self.table.viewport().update()
                 return on_loaded
 
-            cache_image_async(icon_url, _make_cb(asset_id, column, idx))
+            cache_image_async(icon_url, _make_cb(icon_data, idx))
 
         cell_item = QTableWidgetItem()
         cell_item.setData(Qt.ItemDataRole.UserRole, icon_data if icon_data else None)
