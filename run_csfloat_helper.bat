@@ -63,6 +63,7 @@ if not exist "requirements.txt" (
         echo requests^>=2.31.0
         echo pandas^>=2.0.0
         echo emoji^>=2.10.0
+        echo orjson^>=3.10.0
     ) > requirements.txt
     echo [✓] requirements.txt created
     echo.
@@ -101,6 +102,14 @@ if %errorlevel% neq 0 (
     set MISSING_DEPS=1
 ) else (
     echo [✓] emoji is installed
+)
+
+python -c "import orjson" >nul 2>&1
+if %errorlevel% neq 0 (
+    echo [✗] orjson is not installed
+    set MISSING_DEPS=1
+) else (
+    echo [✓] orjson is installed
 )
 
 echo.
