@@ -1,9 +1,28 @@
 # modules/api.py
 
-import json
+import gzip
 import urllib.request
 import urllib.error
 import time
+
+try:
+    import orjson as _json_mod
+
+    def _loads(data):
+        return _json_mod.loads(data)
+
+    def _dumps(obj):
+        return _json_mod.dumps(obj)
+except ImportError:
+    import json as _json_mod
+
+    def _loads(data):
+        if isinstance(data, bytes):
+            data = data.decode("utf-8")
+        return _json_mod.loads(data)
+
+    def _dumps(obj):
+        return _json_mod.dumps(obj).encode("utf-8")
 
 # API endpoints
 API_USER_INFO = "https://csfloat.com/api/v1/me"
@@ -21,12 +40,15 @@ RETRY_DELAY = 1.0  # секунды
 
 
 def _request_json(req: urllib.request.Request):
-    """Helper to read JSON response."""
+    """Helper to read JSON response with gzip support."""
+    req.add_header("Accept-Encoding", "gzip")
     with urllib.request.urlopen(req) as response:
         raw = response.read()
         if not raw:
             return {}
-        return json.loads(raw.decode("utf-8"))
+        if response.headers.get("Content-Encoding") == "gzip" or raw[:2] == b'\x1f\x8b':
+            raw = gzip.decompress(raw)
+        return _loads(raw)
 
 
 def _retry_request(func, *args, max_retries=MAX_RETRIES, retry_delay=RETRY_DELAY, **kwargs):
@@ -77,6 +99,17 @@ def get_user_info(api_key: str):
         return None
 
 
+_INVENTORY_FIELDS = {
+    "asset_id", "market_hash_name", "rarity", "float_value",
+    "paint_seed", "wear_name", "collection", "stickers", "keychains",
+}
+
+
+def _strip_inventory(items):
+    """Оставляет только нужные поля для экономии памяти."""
+    return [{k: v for k, v in item.items() if k in _INVENTORY_FIELDS} for item in items]
+
+
 def get_inventory_data(api_key: str):
     """Get inventory data with automatic retry on errors."""
     def _get():
@@ -84,9 +117,9 @@ def get_inventory_data(api_key: str):
         req = urllib.request.Request(API_INVENTORY, headers=headers)
         data = _request_json(req)
         if isinstance(data, dict) and "items" in data:
-            return data["items"]
+            return _strip_inventory(data["items"])
         if isinstance(data, list):
-            return data
+            return _strip_inventory(data)
         print("Unexpected response format.")
         return []
 
@@ -129,19 +162,15 @@ def bulk_list(api_key: str, items: list):
     }
     req = urllib.request.Request(
         url,
-        data=json.dumps(payload).encode("utf-8"),
+        data=_dumps(payload),
         headers=headers,
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req) as response:
-            raw = response.read()
-            if not raw:
-                return {}
-            return json.loads(raw.decode("utf-8"))
+        return _request_json(req)
     except urllib.error.HTTPError as http_err:
         if http_err.code == 400:
-            error_data = json.load(http_err)
+            error_data = _loads(http_err.read())
             if error_data.get("code") == 4:
                 raise ValueError("Item overpriced. You need to complete KYC.") from http_err
         raise ValueError(f"HTTP error occurred: {http_err}") from http_err
@@ -159,7 +188,7 @@ def bulk_delist(api_key: str, contract_ids: list):
     }
     req = urllib.request.Request(
         url,
-        data=json.dumps(payload).encode("utf-8"),
+        data=_dumps(payload),
         headers=headers,
         method="PATCH",
     )
@@ -183,19 +212,15 @@ def bulk_modify(api_key: str, modifications: list):
     }
     req = urllib.request.Request(
         url,
-        data=json.dumps(payload).encode("utf-8"),
+        data=_dumps(payload),
         headers=headers,
         method="PATCH",
     )
     try:
-        with urllib.request.urlopen(req) as response:
-            raw = response.read()
-            if not raw:
-                return {}
-            return json.loads(raw.decode("utf-8"))
+        return _request_json(req)
     except urllib.error.HTTPError as http_err:
         if http_err.code == 400:
-            error_data = json.load(http_err)
+            error_data = _loads(http_err.read())
             if error_data.get("code") == 4:
                 raise ValueError("Item overpriced. You need to complete KYC.") from http_err
         raise ValueError(f"HTTP error occurred: {http_err}") from http_err

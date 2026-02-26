@@ -326,9 +326,15 @@ class Tab1(QWidget):
         self.collection_edit.setCompleter(completer)
 
     def fetch_user_and_inventory(self, api_key):
-        """Fetch user info and inventory."""
-        user_info = get_user_info(api_key)
-        inventory = get_inventory_data(api_key)
+        """Fetch user info and inventory in parallel."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            user_future = pool.submit(get_user_info, api_key)
+            inv_future = pool.submit(get_inventory_data, api_key)
+            user_info = user_future.result()
+            inventory = inv_future.result()
+
         return {"api_key": api_key, "user_info": user_info, "inventory": inventory}
 
     @pyqtSlot(object)
