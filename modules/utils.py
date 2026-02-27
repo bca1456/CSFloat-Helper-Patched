@@ -7,7 +7,7 @@ import logging
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 import threading
-from PyQt6.QtCore import QMetaObject, Qt, Q_ARG, QObject, QSettings, pyqtSlot
+from PyQt6.QtCore import Qt, QObject, QSettings, pyqtSlot, pyqtSignal
 
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -31,8 +31,14 @@ def shutdown_image_pool():
 class CallbackReceiver(QObject):
     """Принимает и выполняет callbacks в главном потоке Qt."""
 
+    _callback_signal = pyqtSignal(object)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._callback_signal.connect(self._execute)
+
     @pyqtSlot(object)
-    def _invoke_callback(self, callback_fn):
+    def _execute(self, callback_fn):
         try:
             callback_fn()
         except Exception as e:
@@ -126,17 +132,9 @@ def get_hashed_filename(url: str, extension: str) -> str:
 
 
 def invoke_callback_in_main_thread(callback, *args):
-    """Вызывает callback в главном потоке Qt."""
+    """Вызывает callback в главном потоке Qt через signal (cross-thread safe)."""
     if _callback_receiver and callback:
-        def wrapper():
-            callback(*args)
-
-        QMetaObject.invokeMethod(
-            _callback_receiver,
-            "_invoke_callback",
-            Qt.ConnectionType.QueuedConnection,
-            Q_ARG(object, wrapper)
-        )
+        _callback_receiver._callback_signal.emit(lambda: callback(*args))
     elif callback:
         callback(*args)
 

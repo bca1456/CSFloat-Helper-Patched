@@ -12,7 +12,7 @@ from modules.utils import key_id
 
 
 class CustomToolTip(QFrame):
-    """Универсальный кастомный тултип."""
+    """Универсальный кастомный тултип с плавным появлением/скрытием."""
 
     def __init__(self):
         super().__init__(None, Qt.WindowType.ToolTip)
@@ -26,14 +26,44 @@ class CustomToolTip(QFrame):
         lay.addWidget(self.label)
 
         self.setStyleSheet(Theme.tooltip_style())
-        self.hide()
+
+        self._hiding = False
+        self._fade = QPropertyAnimation(self, b"windowOpacity")
+        self._fade.finished.connect(self._on_fade_finished)
+
+        super().hide()
 
     def show_text(self, text: str, global_pos):
         """Показать tooltip с текстом в указанной позиции."""
+        self._hiding = False
         self.label.setText(text)
         self.adjustSize()
         self.move(global_pos + QPoint(12, 16))
-        self.show()
+
+        if not self.isVisible():
+            self.setWindowOpacity(0.0)
+            super().show()
+
+        self._fade.stop()
+        self._fade.setDuration(150)
+        self._fade.setStartValue(self.windowOpacity())
+        self._fade.setEndValue(1.0)
+        self._fade.start()
+
+    def hide(self):
+        if not self.isVisible() or self._hiding:
+            return
+        self._hiding = True
+        self._fade.stop()
+        self._fade.setDuration(100)
+        self._fade.setStartValue(self.windowOpacity())
+        self._fade.setEndValue(0.0)
+        self._fade.start()
+
+    def _on_fade_finished(self):
+        if self._hiding:
+            super().hide()
+            self._hiding = False
 
     def move_to_cursor(self):
         """Переместить tooltip к курсору."""

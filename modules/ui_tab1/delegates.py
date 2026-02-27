@@ -76,24 +76,33 @@ class IconDelegate(QStyledItemDelegate):
 
         for entry in icons:
             pixmap = entry.get("pixmap")
-            if pixmap and not pixmap.isNull():
-                painter.drawPixmap(x, y, pixmap)
+            if not pixmap or pixmap.isNull():
+                continue
+            painter.drawPixmap(x, y, pixmap)
             x += self.ICON_SIZE + self.ICON_SPACING
 
         painter.restore()
+
+    def _visible_icons(self, icons):
+        """Только иконки с загруженным pixmap."""
+        return [e for e in icons if e.get("pixmap") and not e["pixmap"].isNull()]
 
     def sizeHint(self, option, index):
         icons = index.data(Qt.ItemDataRole.UserRole)
         if not icons:
             return QSize(27, 30)
-        width = len(icons) * (self.ICON_SIZE + self.ICON_SPACING) + 4
+        visible = self._visible_icons(icons)
+        if not visible:
+            return QSize(27, 30)
+        width = len(visible) * (self.ICON_SIZE + self.ICON_SPACING) + 4
         return QSize(max(width, 27), 30)
 
     def helpEvent(self, event, view, option, index):
         """Тултипы стикеров — определяем какой стикер под курсором."""
         if event.type() == QEvent.Type.ToolTip:
             icons = index.data(Qt.ItemDataRole.UserRole)
-            if not icons:
+            visible = self._visible_icons(icons) if icons else []
+            if not visible:
                 if self._tooltip_widget:
                     self._tooltip_widget.hide()
                 return False
@@ -101,8 +110,8 @@ class IconDelegate(QStyledItemDelegate):
             mouse_x = event.pos().x() - option.rect.x() - 2
             icon_idx = mouse_x // (self.ICON_SIZE + self.ICON_SPACING)
 
-            if 0 <= icon_idx < len(icons):
-                tooltip = icons[icon_idx].get("tooltip", "")
+            if 0 <= icon_idx < len(visible):
+                tooltip = visible[icon_idx].get("tooltip", "")
                 if tooltip and self._tooltip_widget:
                     try:
                         gp = event.globalPos()

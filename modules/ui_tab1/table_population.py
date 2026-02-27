@@ -144,6 +144,7 @@ class TablePopulator:
         """Заполняет ячейку с данными иконок для делегата."""
         entries = item.get(field, []) or []
         icon_data = []
+        urls = []
 
         for entry in entries:
             icon_url = entry.get("icon_url")
@@ -155,10 +156,14 @@ class TablePopulator:
             tooltip = f"{name}\n#{pattern}" if pattern else name
 
             icon_data.append({"name": name, "tooltip": tooltip, "pixmap": None})
+            urls.append(icon_url)
 
-            idx = len(icon_data) - 1
+        cell_item = QTableWidgetItem()
+        cell_item.setData(Qt.ItemDataRole.UserRole, icon_data if icon_data else None)
+        self.table.setItem(row, column, cell_item)
 
-            def _make_cb(data_list, i):
+        for idx, icon_url in enumerate(urls):
+            def _make_cb(cell, data_list, i, col):
                 def on_loaded(path):
                     if not path or not os.path.exists(path):
                         return
@@ -167,16 +172,18 @@ class TablePopulator:
                         Qt.AspectRatioMode.KeepAspectRatio,
                         Qt.TransformationMode.SmoothTransformation,
                     )
-                    if i < len(data_list):
-                        data_list[i]["pixmap"] = pm
-                        self.table.viewport().update()
+                    if pm.isNull() or i >= len(data_list):
+                        return
+                    data_list[i]["pixmap"] = pm
+                    cell.setData(Qt.ItemDataRole.UserRole, data_list)
+                    row = cell.row()
+                    if row >= 0:
+                        model = self.table.model()
+                        idx = model.index(row, col)
+                        model.dataChanged.emit(idx, idx)
                 return on_loaded
 
-            cache_image_async(icon_url, _make_cb(icon_data, idx))
-
-        cell_item = QTableWidgetItem()
-        cell_item.setData(Qt.ItemDataRole.UserRole, icon_data if icon_data else None)
-        self.table.setItem(row, column, cell_item)
+            cache_image_async(icon_url, _make_cb(cell_item, icon_data, idx, column))
 
     def _populate_stickers(self, row, item):
         """Заполняет стикеры."""

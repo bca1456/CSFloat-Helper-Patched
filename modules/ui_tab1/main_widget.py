@@ -2,7 +2,7 @@
 
 import logging
 import os
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QCompleter
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QCompleter, QLabel
 from modules.messagebox import critical
 from PyQt6.QtGui import QIcon
 from PyQt6.QtCore import Qt, QSettings, pyqtSignal, pyqtSlot, QEvent, QThreadPool
@@ -152,6 +152,7 @@ class Tab1(QWidget):
         self.inventory_table.setItemDelegateForColumn(COL_PRICE, self._price_delegate)
         self.inventory_table.setItemDelegateForColumn(COL_STICKERS, self._sticker_delegate)
         self.inventory_table.setItemDelegateForColumn(COL_KEYCHAINS, self._keychain_delegate)
+        self.inventory_table.setMouseTracking(True)
         self.inventory_table.viewport().installEventFilter(self)
 
         self.populator = TablePopulator(
@@ -180,6 +181,14 @@ class Tab1(QWidget):
         self.theme_switch = ToggleSwitch(self, show_text=False, size=(28, 14))
         self.theme_switch.setChecked(Theme.current_theme == "dark")
         self.theme_switch.toggled_signal.connect(self._on_theme_toggle)
+
+        self.status_label = QLabel(self)
+        self.status_label.setStyleSheet(self._status_label_style())
+
+        self.inventory_table.selectionModel().selectionChanged.connect(
+            lambda: self._update_status_label()
+        )
+
         self._position_theme_switch()
 
     def _on_theme_toggle(self, checked):
@@ -188,6 +197,38 @@ class Tab1(QWidget):
     def _position_theme_switch(self):
         if hasattr(self, 'theme_switch'):
             self.theme_switch.move(self.width() - 40, self.height() - 24)
+        if hasattr(self, 'status_label'):
+            self.status_label.move(20, self.height() - 26)
+
+    def _status_label_style(self):
+        return (
+            f"color: {Theme.TEXT_SECONDARY}; "
+            f"font-size: {Theme.FONT_SIZE_SMALL + 1}pt; "
+            f"font-family: '{Theme.FONT_FAMILY}';"
+        )
+
+    def _update_status_label(self):
+        table = self.inventory_table
+        total = table.rowCount()
+        visible = 0
+        on_sale = 0
+        for row in range(total):
+            if not table.isRowHidden(row):
+                visible += 1
+                item = table.item(row, COL_LISTING_ID)
+                if item and item.text():
+                    on_sale += 1
+
+        selected = len(table.selectionModel().selectedRows())
+
+        filters_active = visible != total
+        if filters_active:
+            text = f"Items: {visible}/{total} | On Sale: {on_sale} | Selected: {selected}"
+        else:
+            text = f"Items: {total} | On Sale: {on_sale} | Selected: {selected}"
+
+        self.status_label.setText(text)
+        self.status_label.adjustSize()
 
     def refresh_styles(self):
         """Переприменить стили всех виджетов после смены темы."""
@@ -251,12 +292,17 @@ class Tab1(QWidget):
         # Тултип
         self.tooltip.setStyleSheet(Theme.tooltip_style())
         self.theme_switch.update()
+        self.status_label.setStyleSheet(self._status_label_style())
 
     def eventFilter(self, obj, event):
         if obj is self.inventory_table.viewport():
             et = event.type()
             if et in (QEvent.Type.Leave, QEvent.Type.Wheel):
                 self.tooltip.hide()
+            elif et == QEvent.Type.MouseMove:
+                idx = self.inventory_table.indexAt(event.pos())
+                if not idx.isValid() or idx.column() not in (COL_STICKERS, COL_KEYCHAINS):
+                    self.tooltip.hide()
         return super().eventFilter(obj, event)
 
     def resizeEvent(self, event):
@@ -284,9 +330,18 @@ class Tab1(QWidget):
         threadpool.start(schema_worker)
 
         for api_key in self.api_keys:
-            worker = ApiWorker(self.fetch_user_and_inventory, api_key)
-            worker.signals.result.connect(self.handle_api_result)
-            worker.signals.error.connect(self.handle_api_error)
+            cached_steam_id = self.settings.value(
+                f"account_{key_id(api_key)}_steam_id", "", type=str)
+
+            if cached_steam_id:
+                worker = ApiWorker(self.fetch_all_data, api_key, cached_steam_id)
+                worker.signals.result.connect(self.handle_full_result)
+                worker.signals.error.connect(self.handle_api_error)
+            else:
+                worker = ApiWorker(self.fetch_user_and_inventory, api_key)
+                worker.signals.result.connect(self.handle_api_result)
+                worker.signals.error.connect(self.handle_api_error)
+
             threadpool.start(worker)
 
     def fetch_schema(self):
@@ -319,8 +374,24 @@ class Tab1(QWidget):
         completer.activated.connect(self.on_collection_selected)
         self.collection_edit.setCompleter(completer)
 
+    def fetch_all_data(self, api_key, steam_id):
+        """Fetch user info, inventory and stall in parallel (cached steam_id)."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            user_future = pool.submit(get_user_info, api_key)
+            inv_future = pool.submit(get_inventory_data, api_key)
+            stall_future = pool.submit(get_stall_data, api_key, steam_id)
+
+            return {
+                "api_key": api_key,
+                "user_info": user_future.result(),
+                "inventory": inv_future.result(),
+                "stall": stall_future.result() or [],
+            }
+
     def fetch_user_and_inventory(self, api_key):
-        """Fetch user info and inventory in parallel."""
+        """Fetch user info and inventory in parallel (no cached steam_id)."""
         from concurrent.futures import ThreadPoolExecutor
 
         with ThreadPoolExecutor(max_workers=2) as pool:
@@ -332,8 +403,28 @@ class Tab1(QWidget):
         return {"api_key": api_key, "user_info": user_info, "inventory": inventory}
 
     @pyqtSlot(object)
+    def handle_full_result(self, result):
+        """Handle result when all 3 requests ran in parallel (cached steam_id)."""
+        api_key = result.get("api_key")
+        user_info = result.get("user_info")
+        inventory = result.get("inventory")
+        stall_data = result.get("stall", [])
+
+        self.store.add_user_result(api_key, user_info, inventory)
+        self.store.add_stall_result(stall_data)
+
+        # Обновляем кэш steam_id на случай смены аккаунта
+        steam_id = user_info.get("steam_id") if user_info else None
+        if steam_id:
+            self.settings.setValue(f"account_{key_id(api_key)}_steam_id", steam_id)
+
+        account_inventory = [item for item in self.store.inventory if item.get("api_key") == api_key]
+        self.populator.append(account_inventory, stall_data)
+        self._update_status_label()
+
+    @pyqtSlot(object)
     def handle_api_result(self, result):
-        """Handle user info and inventory result."""
+        """Handle user info and inventory result (fallback, no cached steam_id)."""
         api_key = result.get("api_key")
         user_info = result.get("user_info")
         inventory = result.get("inventory")
@@ -341,6 +432,9 @@ class Tab1(QWidget):
         self.store.add_user_result(api_key, user_info, inventory)
 
         steam_id = user_info.get("steam_id") if user_info else None
+        if steam_id:
+            self.settings.setValue(f"account_{key_id(api_key)}_steam_id", steam_id)
+
         worker = ApiWorker(self.fetch_stall_data, api_key, steam_id)
         worker.signals.result.connect(self.handle_stall_result)
         worker.signals.error.connect(self.handle_stall_error)
@@ -373,6 +467,7 @@ class Tab1(QWidget):
 
         account_inventory = [item for item in self.store.inventory if item.get("api_key") == api_key]
         self.populator.append(account_inventory, stall_data)
+        self._update_status_label()
 
     @pyqtSlot(tuple)
     def handle_stall_error(self, error):
@@ -385,24 +480,28 @@ class Tab1(QWidget):
 
     def _check_loading_complete(self):
         """Включает UI когда все данные загружены и вставлены в таблицу."""
+        self._update_status_label()
         if self.store.all_stalls_loaded() and not self.populator._processing:
             self.inventory_table.setSortingEnabled(True)
             self.ops._set_buttons_enabled(True)
 
     def apply_filters(self):
         self.filter_ctrl.apply()
+        self._update_status_label()
 
     @pyqtSlot(bool)
     def update_rarity_filters(self, checked):
         btn = self.sender()
         if btn:
             self.filter_ctrl.update_rarity(btn.rarity, checked)
+            self._update_status_label()
 
     @pyqtSlot(bool)
     def update_condition_filters(self, checked):
         btn = self.sender()
         if btn:
             self.filter_ctrl.update_condition(btn.wear_condition, checked)
+            self._update_status_label()
 
     def sell_items(self):
         self.ops.sell_items()

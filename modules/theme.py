@@ -218,7 +218,7 @@ class Theme:
                 color: {cls.TEXT_PRIMARY};
                 border: 1px solid {cls.BORDER_INPUT};
                 border-radius: {cls.RADIUS}px;
-                padding: 2px 10px 2px 5px;
+                padding: 0px 10px 2px 5px;
             }}
             QLineEdit:focus {{ border: 1px solid {cls.PRIMARY}; }}
         """
@@ -232,8 +232,7 @@ class Theme:
                 color: {cls.TEXT_PRIMARY};
                 border: 1px solid {cls.BORDER_INPUT};
                 border-radius: {cls.RADIUS}px;
-                padding-left: 5px;
-                padding-right: 28px;
+                padding: 0px 28px 2px 5px;
                 font-size: {cls.FONT_SIZE}pt;
             }}
             QLineEdit::placeholder {{
@@ -487,8 +486,9 @@ class Theme:
                 {radius}
                 background-color: {cls.BG_LIGHT};
                 color: {cls.TEXT_SECONDARY};
+                padding-bottom: 1px;
             }}
-            QPushButton:checked {{ background-color: {cls.PRIMARY}; color: {cls.BG_WHITE}; border: 1px solid {cls.PRIMARY}; }}
+            QPushButton:checked {{ background-color: {cls.PRIMARY}; color: {cls.BG_WHITE}; border: 1px solid {cls.PRIMARY}; padding-bottom: 1px; }}
             QPushButton:hover:!checked {{ background-color: {cls.HOVER_GRAY}; color: {cls.TEXT_PRIMARY}; }}
         """
 

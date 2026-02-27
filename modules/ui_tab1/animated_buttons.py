@@ -1,7 +1,7 @@
 # modules/ui_tab1/animated_buttons.py
 
 from PyQt6.QtWidgets import QPushButton, QGraphicsDropShadowEffect
-from PyQt6.QtCore import QPropertyAnimation, QEasingCurve, QRect
+from PyQt6.QtCore import QPropertyAnimation, QEasingCurve, QRect, QTimer
 from PyQt6.QtGui import QColor
 
 from modules.theme import Theme
@@ -24,7 +24,15 @@ class AnimatedButtonCombo(QPushButton):
 
         self._shadow_animation = None
 
+        # Debounce для предотвращения зацикливания на границе кнопки
+        self._leave_timer = QTimer(self)
+        self._leave_timer.setSingleShot(True)
+        self._leave_timer.setInterval(50)
+        self._leave_timer.timeout.connect(self._do_leave)
+
     def enterEvent(self, event):
+        self._leave_timer.stop()
+
         if self._original_geometry is None:
             self._original_geometry = self.geometry()
 
@@ -62,6 +70,10 @@ class AnimatedButtonCombo(QPushButton):
         super().enterEvent(event)
 
     def leaveEvent(self, event):
+        self._leave_timer.start()
+        super().leaveEvent(event)
+
+    def _do_leave(self):
         if self._original_geometry:
             self._scale_animation = QPropertyAnimation(self, b"geometry")
             self._scale_animation.setDuration(150)
@@ -78,5 +90,3 @@ class AnimatedButtonCombo(QPushButton):
         self._shadow_animation.start()
 
         self.shadow.setColor(QColor(*Theme.SHADOW_RGB, 0))
-
-        super().leaveEvent(event)
