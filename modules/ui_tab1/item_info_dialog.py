@@ -82,10 +82,20 @@ def _calc_price(data, metric):
         return min(prices) / 100
     if metric == "max":
         return max(prices) / 100
+    if metric == "weighted":
+        total_vol = sum(d["count"] for d in data)
+        if total_vol == 0:
+            return statistics.median(prices) / 100
+        return sum(d["avg_price"] * d["count"] for d in data) / total_vol / 100
     return statistics.median(prices) / 100
 
 
 def _calc_change(data, prev_data, metric):
+    if metric == "range":
+        if not data:
+            return 0
+        prices = [d["avg_price"] for d in data]
+        return (max(prices) - min(prices)) / 100
     if not prev_data or not data:
         return 0
     med_cur = statistics.median(d["avg_price"] for d in data)
@@ -99,6 +109,9 @@ def _calc_volume(data, days, metric):
     total = sum(d["count"] for d in data)
     if metric == "avg_day":
         return round(total / days, 1) if days else 0
+    if metric == "med_day":
+        daily = [d["count"] for d in data]
+        return round(statistics.median(daily), 1) if daily else 0
     return total
 
 
@@ -216,7 +229,10 @@ class _SingleArcCircle(QWidget):
         change_abs = min(abs(self.change), max_change)
         fill_ratio = change_abs / max_change
         sweep = max_sweep * fill_ratio
-        arc_color = QColor("#4CAF50") if self.change >= 0 else QColor("#E85454")
+        if self.change_mode == "range":
+            arc_color = QColor(Theme.PRIMARY)
+        else:
+            arc_color = QColor("#4CAF50") if self.change >= 0 else QColor("#E85454")
         if self._hovered:
             arc_color = arc_color.lighter(125)
         thickness = arc_thickness + (1 if self._hovered else 0)
@@ -238,18 +254,24 @@ class _SingleArcCircle(QWidget):
         painter.setFont(QFont(Theme.FONT_FAMILY, 11, QFont.Weight.Bold))
         painter.drawText(QRectF(0, cy - 15, w, 18), Qt.AlignmentFlag.AlignCenter, f"{self.price_val:.2f}")
 
-        painter.setPen(QColor("#4CAF50") if self.change >= 0 else QColor("#E85454"))
+        if self.change_mode == "range":
+            painter.setPen(QColor(Theme.TEXT_SECONDARY))
+        else:
+            painter.setPen(QColor("#4CAF50") if self.change >= 0 else QColor("#E85454"))
         painter.setFont(QFont(Theme.FONT_FAMILY, 8, QFont.Weight.Bold))
-        sign = "+" if self.change >= 0 else ""
-        if self.change_mode == "abs":
+        if self.change_mode == "range":
+            change_text = f"\u00b1${self.change:.2f}"
+        elif self.change_mode == "abs":
+            sign = "+" if self.change >= 0 else ""
             change_text = f"{sign}${abs(self.change):.2f}"
         else:
+            sign = "+" if self.change >= 0 else ""
             change_text = f"{sign}{self.change:.1f}"
         painter.drawText(QRectF(0, cy + 2, w, 14), Qt.AlignmentFlag.AlignCenter, change_text)
 
         painter.setPen(QColor(Theme.TEXT_SECONDARY))
         painter.setFont(QFont(Theme.FONT_FAMILY, 6))
-        if self.volume_mode == "avg_day":
+        if self.volume_mode in ("avg_day", "med_day"):
             vol_text = f"{self.volume}/d"
         else:
             vol_text = f"{self.volume}"
@@ -268,15 +290,19 @@ class _SingleArcCircle(QWidget):
 
     def mouseMoveEvent(self, event):
         if self._hovered:
-            sign = "+" if self.change >= 0 else ""
-            if self.change_mode == "abs":
+            if self.change_mode == "range":
+                chg_str = f"\u00b1${self.change:.2f}"
+            elif self.change_mode == "abs":
+                sign = "+" if self.change >= 0 else ""
                 chg_str = f"{sign}${abs(self.change):.2f}"
             else:
+                sign = "+" if self.change >= 0 else ""
                 chg_str = f"{sign}{self.change:.1f}%"
-            vol_str = f"{self.volume}/d" if self.volume_mode == "avg_day" else str(self.volume)
+            vol_str = f"{self.volume}/d" if self.volume_mode in ("avg_day", "med_day") else str(self.volume)
+            chg_label = "Range" if self.change_mode == "range" else "Change"
             text = (f"{self.period_label}\n"
                     f"Price: ${self.price_val:.2f}\n"
-                    f"Change: {chg_str}\n"
+                    f"{chg_label}: {chg_str}\n"
                     f"Volume: {vol_str}")
             QToolTip.showText(self.mapToGlobal(event.pos()), text, self)
 
@@ -518,10 +544,28 @@ class ItemInfoDialog(QDialog):
         """)
 
         self._build_ui()
+        self._build_settings_btn()
         Theme.apply_titlebar_theme(self)
 
         self._loading = LoadingOverlay(self, "Loading item data...")
         QTimer.singleShot(50, self._start_loading)
+
+    def _build_settings_btn(self):
+        self._stats_btn = QPushButton("\u2699", self)
+        self._stats_btn.setFixedSize(22, 22)
+        self._stats_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._stats_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; border: none;
+                color: {Theme.TEXT_SECONDARY}; font-size: 13pt;
+            }}
+            QPushButton:hover {{ color: {Theme.PRIMARY}; }}
+        """)
+        self._stats_btn.clicked.connect(self._show_stats_menu)
+        self._position_settings_btn()
+
+    def _position_settings_btn(self):
+        self._stats_btn.move(self.width() - 30, 6)
 
     def _on_icon_loaded(self, path):
         import os
@@ -724,20 +768,6 @@ class ItemInfoDialog(QDialog):
 
         outer.addLayout(filters_col)
 
-        # Кнопка настроек статистики
-        self._stats_btn = QPushButton("\u2699")
-        self._stats_btn.setFixedSize(20, 20)
-        self._stats_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._stats_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: transparent; border: none;
-                color: {Theme.TEXT_SECONDARY}; font-size: 12pt;
-            }}
-            QPushButton:hover {{ color: {Theme.PRIMARY}; }}
-        """)
-        self._stats_btn.clicked.connect(self._show_stats_menu)
-        outer.addWidget(self._stats_btn, alignment=Qt.AlignmentFlag.AlignTop)
-
         # Stats placeholder — заполнится после загрузки graph
         self._stats_container = QWidget()
         self._stats_container.setFixedSize(260, 80)
@@ -755,7 +785,7 @@ class ItemInfoDialog(QDialog):
         price_menu = menu.addMenu("Price")
         price_group = QActionGroup(price_menu)
         for key, label in [("median", "Median"), ("average", "Average"),
-                           ("min", "Min"), ("max", "Max")]:
+                           ("weighted", "Weighted"), ("min", "Min"), ("max", "Max")]:
             action = price_menu.addAction(label)
             action.setCheckable(True)
             action.setChecked(self._stats_config["price"] == key)
@@ -764,7 +794,8 @@ class ItemInfoDialog(QDialog):
 
         change_menu = menu.addMenu("Change")
         change_group = QActionGroup(change_menu)
-        for key, label in [("pct", "Percent (%)"), ("abs", "Absolute ($)")]:
+        for key, label in [("pct", "Percent (%)"), ("abs", "Absolute ($)"),
+                           ("range", "Range ($)")]:
             action = change_menu.addAction(label)
             action.setCheckable(True)
             action.setChecked(self._stats_config["change"] == key)
@@ -773,7 +804,8 @@ class ItemInfoDialog(QDialog):
 
         vol_menu = menu.addMenu("Volume")
         vol_group = QActionGroup(vol_menu)
-        for key, label in [("total", "Total"), ("avg_day", "Avg/day")]:
+        for key, label in [("total", "Total"), ("avg_day", "Avg/day"),
+                           ("med_day", "Med/day")]:
             action = vol_menu.addAction(label)
             action.setCheckable(True)
             action.setChecked(self._stats_config["volume"] == key)
@@ -1331,3 +1363,5 @@ class ItemInfoDialog(QDialog):
         super().resizeEvent(event)
         if hasattr(self, '_loading'):
             self._loading.setGeometry(self.rect())
+        if hasattr(self, '_stats_btn'):
+            self._position_settings_btn()
