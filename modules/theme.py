@@ -571,3 +571,27 @@ class Theme:
                 stop:1 rgba(189, 189, 189, 0)
             );
         """
+
+    @classmethod
+    def menu_style(cls):
+        return f"""
+            QMenu {{
+                background-color: {cls.BG_WHITE};
+                border: 1px solid {cls.BORDER_GRID};
+                padding: 2px 0;
+            }}
+            QMenu::item {{
+                padding: 4px 16px;
+                color: {cls.TEXT_PRIMARY};
+                font-family: '{cls.FONT_FAMILY}';
+                font-size: {cls.FONT_SIZE_SMALL}pt;
+            }}
+            QMenu::item:selected {{
+                background-color: {cls.HOVER_GRAY};
+            }}
+            QMenu::separator {{
+                height: 1px;
+                background: {cls.BORDER_GRID};
+                margin: 2px 6px;
+            }}
+        """

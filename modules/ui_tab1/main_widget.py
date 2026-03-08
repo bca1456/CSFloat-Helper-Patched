@@ -2,7 +2,7 @@
 
 import logging
 import os
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QCompleter, QLabel
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QCompleter, QLabel, QMenu
 from modules.messagebox import critical
 from PyQt6.QtGui import QIcon
 from PyQt6.QtCore import Qt, QSettings, pyqtSignal, pyqtSlot, QEvent, QThreadPool
@@ -10,6 +10,7 @@ from PyQt6.QtCore import Qt, QSettings, pyqtSignal, pyqtSlot, QEvent, QThreadPoo
 from modules.theme import Theme
 from modules.api import get_user_info, get_inventory_data, get_stall_data, get_schema
 from modules.workers import ApiWorker, KeepOnlineWorker
+from modules.loading_spinner import LoadingOverlay
 from modules.collections_manager import update_collections_from_schema, get_collections
 from modules.utils import key_id, migrate_settings, shutdown_image_pool
 from .constants import refresh_collections
@@ -17,6 +18,8 @@ from modules.models.columns import (
     COL_NAME, COL_STICKERS, COL_KEYCHAINS, COL_FLOAT, COL_SEED,
     COL_DAYS, COL_PRICE, COL_LISTING_ID, COL_ASSET_ID, COL_CREATED_AT,
     COL_PRICE_VALUE, COL_API_KEY, COL_COLLECTION, COL_RARITY, COL_WEAR,
+    COL_DEF_INDEX, COL_PAINT_INDEX, COL_INSPECT_LINK, COL_ICON_URL,
+    COL_STICKER_INDEX,
     DEFAULT_COLUMN_WIDTHS,
 )
 from modules.models.inventory_store import InventoryStore
@@ -154,6 +157,10 @@ class Tab1(QWidget):
         self.inventory_table.setItemDelegateForColumn(COL_KEYCHAINS, self._keychain_delegate)
         self.inventory_table.setMouseTracking(True)
         self.inventory_table.viewport().installEventFilter(self)
+        self.inventory_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.inventory_table.customContextMenuRequested.connect(self._show_context_menu)
+
+        self._loading_overlay = LoadingOverlay(self.inventory_table)
 
         self.populator = TablePopulator(
             self.inventory_table, self.icon_path,
@@ -229,6 +236,45 @@ class Tab1(QWidget):
 
         self.status_label.setText(text)
         self.status_label.adjustSize()
+
+    def _show_context_menu(self, pos):
+        item = self.inventory_table.itemAt(pos)
+        if not item:
+            return
+
+        row = item.row()
+        menu = QMenu(self)
+        menu.setStyleSheet(Theme.menu_style())
+
+        item_info_action = menu.addAction("Item Info")
+        item_info_action.triggered.connect(lambda: self._show_item_info(row))
+
+        menu.exec(self.inventory_table.mapToGlobal(pos))
+
+    def _show_item_info(self, row):
+        from .item_info_dialog import ItemInfoDialog
+
+        name_item = self.inventory_table.item(row, COL_NAME)
+        if not name_item:
+            return
+
+        market_hash_name = name_item.text()
+        def _col_text(col):
+            item = self.inventory_table.item(row, col)
+            return item.text() if item else ""
+
+        dlg = ItemInfoDialog(
+            market_hash_name=market_hash_name,
+            def_index=_col_text(COL_DEF_INDEX),
+            paint_index=_col_text(COL_PAINT_INDEX),
+            sticker_index=_col_text(COL_STICKER_INDEX),
+            inspect_link=_col_text(COL_INSPECT_LINK),
+            wear_name=_col_text(COL_WEAR),
+            api_key=_col_text(COL_API_KEY),
+            icon_url=_col_text(COL_ICON_URL),
+            parent=self,
+        )
+        dlg.exec()
 
     def refresh_styles(self):
         """Переприменить стили всех виджетов после смены темы."""
@@ -323,6 +369,7 @@ class Tab1(QWidget):
         self.inventory_table.setRowCount(0)
         self.inventory_table.setSortingEnabled(False)
         self.ops._set_buttons_enabled(False)
+        self._loading_overlay.start("Loading inventory...")
 
         schema_worker = ApiWorker(self.fetch_schema)
         schema_worker.signals.result.connect(self.handle_schema_result)
@@ -484,6 +531,7 @@ class Tab1(QWidget):
         if self.store.all_stalls_loaded() and not self.populator._processing:
             self.inventory_table.setSortingEnabled(True)
             self.ops._set_buttons_enabled(True)
+            self._loading_overlay.stop()
 
     def apply_filters(self):
         self.filter_ctrl.apply()

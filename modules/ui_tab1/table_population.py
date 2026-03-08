@@ -10,6 +10,8 @@ from modules.models.columns import (
     COL_NAME, COL_STICKERS, COL_KEYCHAINS, COL_FLOAT, COL_SEED,
     COL_DAYS, COL_PRICE, COL_LISTING_ID, COL_ASSET_ID, COL_CREATED_AT,
     COL_PRICE_VALUE, COL_API_KEY, COL_COLLECTION, COL_RARITY, COL_WEAR,
+    COL_DEF_INDEX, COL_PAINT_INDEX, COL_INSPECT_LINK, COL_ICON_URL,
+    COL_STICKER_INDEX,
 )
 from .constants import RARITY_COLOR_MAP
 
@@ -268,3 +270,18 @@ class TablePopulator:
         asset_item = QTableWidgetItem(asset_id)
         self.table.setItem(row, COL_ASSET_ID, asset_item)
         self.asset_index[asset_id] = asset_item
+
+        def_index_item = QTableWidgetItem(str(item.get("def_index", "")))
+        self.table.setItem(row, COL_DEF_INDEX, def_index_item)
+
+        paint_index_item = QTableWidgetItem(str(item.get("paint_index", "")))
+        self.table.setItem(row, COL_PAINT_INDEX, paint_index_item)
+
+        inspect_link_item = QTableWidgetItem(item.get("inspect_link", "") or "")
+        self.table.setItem(row, COL_INSPECT_LINK, inspect_link_item)
+
+        icon_url_item = QTableWidgetItem(item.get("icon_url", "") or "")
+        self.table.setItem(row, COL_ICON_URL, icon_url_item)
+
+        sticker_index_item = QTableWidgetItem(str(item.get("sticker_index", "") or ""))
+        self.table.setItem(row, COL_STICKER_INDEX, sticker_index_item)
