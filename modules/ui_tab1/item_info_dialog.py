@@ -218,7 +218,12 @@ class _SingleArcCircle(QWidget):
         radius = min(w, h) / 2 - 6
         max_sweep = 270
         start_angle_deg = 225
-        max_change = 50.0
+        # Масштаб арки зависит от режима
+        if self.change_mode == "pct":
+            max_change = 50.0
+        else:
+            # abs / range — масштабируем относительно цены (50% от цены = полная арка)
+            max_change = max(self.price_val * 0.5, 0.01)
 
         rect = QRectF(cx - radius, cy - radius, radius * 2, radius * 2)
 
