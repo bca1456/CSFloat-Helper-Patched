@@ -54,7 +54,6 @@ def _filter_by_days(graph, days):
 
 STATS_SETTINGS_KEYS = {
     "price": "stats_price_metric",
-    "change": "stats_change_metric",
     "volume": "stats_volume_metric",
 }
 
@@ -74,25 +73,6 @@ def _calc_price(data, metric):
         return sum(d["avg_price"] * d["count"] for d in data) / total_vol / 100
     return statistics.median(prices) / 100
 
-
-def _calc_change(data, metric):
-    """Change внутри периода: первая половина vs вторая (тренд)."""
-    if not data:
-        return 0
-    if metric == "range":
-        prices = [d["avg_price"] for d in data]
-        return (max(prices) - min(prices)) / 100
-    # Делим период пополам: старая половина vs свежая
-    mid = len(data) // 2
-    if mid == 0:
-        return 0
-    old_half = data[:mid]
-    new_half = data[mid:]
-    med_old = statistics.median(d["avg_price"] for d in old_half)
-    med_new = statistics.median(d["avg_price"] for d in new_half)
-    if metric == "abs":
-        return (med_new - med_old) / 100
-    return (med_new - med_old) / med_old * 100 if med_old else 0
 
 
 def _calc_volume(data, days, metric):
@@ -183,15 +163,15 @@ def parse_order_expression(expression, def_index, paint_index):
 # ═══════════════════════════════════════════════════════════════════
 
 class _SingleArcCircle(QWidget):
+    """Круг статистики. Арка = ликвидность (объём продаж)."""
 
-    def __init__(self, label, price_val, change, volume,
-                 change_mode="pct", volume_mode="total", parent=None):
+    def __init__(self, label, price_val, volume, max_volume,
+                 volume_mode="total", parent=None):
         super().__init__(parent)
         self.period_label = label
         self.price_val = price_val
-        self.change = change
         self.volume = volume
-        self.change_mode = change_mode
+        self.max_volume = max_volume
         self.volume_mode = volume_mode
         self._hovered = False
         self.setMouseTracking(True)
@@ -208,69 +188,52 @@ class _SingleArcCircle(QWidget):
         radius = min(w, h) / 2 - 6
         max_sweep = 270
         start_angle_deg = 225
-        # Масштаб арки зависит от режима
-        if self.change_mode == "pct":
-            max_change = 50.0
-        else:
-            # abs / range — масштабируем относительно цены (50% от цены = полная арка)
-            max_change = max(self.price_val * 0.5, 0.01)
 
         rect = QRectF(cx - radius, cy - radius, radius * 2, radius * 2)
 
+        # Трек (фон арки)
         track_color = QColor(Theme.BG_LIGHT) if not self._hovered else QColor(Theme.BG_HOVER)
         painter.setPen(QPen(track_color, arc_thickness, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
         painter.drawArc(rect, int(start_angle_deg * 16), int(-max_sweep * 16))
 
-        change_abs = min(abs(self.change), max_change)
-        fill_ratio = change_abs / max_change
+        # Заполнение арки — пропорционально объёму
+        fill_ratio = min(self.volume / self.max_volume, 1.0) if self.max_volume > 0 else 0
         sweep = max_sweep * fill_ratio
-        if self.change_mode == "range":
-            arc_color = QColor(Theme.PRIMARY)
-        else:
-            arc_color = QColor("#4CAF50") if self.change >= 0 else QColor("#E85454")
+
+        arc_color = QColor(Theme.PRIMARY)
         if self._hovered:
-            arc_color = arc_color.lighter(125)
+            arc_color = arc_color.lighter(120)
         thickness = arc_thickness + (1 if self._hovered else 0)
         painter.setPen(QPen(arc_color, thickness, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
         painter.drawArc(rect, int(start_angle_deg * 16), int(-sweep * 16))
 
-        end_rad = math.radians(start_angle_deg - sweep)
-        dot_x = cx + radius * math.cos(end_rad)
-        dot_y = cy - radius * math.sin(end_rad)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QBrush(arc_color))
-        painter.drawEllipse(QPointF(dot_x, dot_y), 2.5, 2.5)
+        # Точка на конце арки
+        if sweep > 0:
+            end_rad = math.radians(start_angle_deg - sweep)
+            dot_x = cx + radius * math.cos(end_rad)
+            dot_y = cy - radius * math.sin(end_rad)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(arc_color))
+            painter.drawEllipse(QPointF(dot_x, dot_y), 2.5, 2.5)
 
+        # Период
         painter.setPen(QColor(Theme.TEXT_SECONDARY))
         painter.setFont(QFont(Theme.FONT_FAMILY, 7))
-        painter.drawText(QRectF(0, cy - 26, w, 12), Qt.AlignmentFlag.AlignCenter, self.period_label)
+        painter.drawText(QRectF(0, cy - 22, w, 12), Qt.AlignmentFlag.AlignCenter, self.period_label)
 
+        # Цена
         painter.setPen(QColor(Theme.PRIMARY))
         painter.setFont(QFont(Theme.FONT_FAMILY, 10, QFont.Weight.Bold))
-        painter.drawText(QRectF(0, cy - 15, w, 18), Qt.AlignmentFlag.AlignCenter, f"{self.price_val:.2f}")
+        painter.drawText(QRectF(0, cy - 11, w, 18), Qt.AlignmentFlag.AlignCenter, f"${self.price_val:.2f}")
 
-        if self.change_mode == "range":
-            painter.setPen(QColor(Theme.TEXT_SECONDARY))
-        else:
-            painter.setPen(QColor("#4CAF50") if self.change >= 0 else QColor("#E85454"))
-        painter.setFont(QFont(Theme.FONT_FAMILY, 8, QFont.Weight.Bold))
-        if self.change_mode == "range":
-            change_text = f"\u00b1${self.change:.2f}"
-        elif self.change_mode == "abs":
-            sign = "+" if self.change >= 0 else ""
-            change_text = f"{sign}${abs(self.change):.2f}"
-        else:
-            sign = "+" if self.change >= 0 else ""
-            change_text = f"{sign}{self.change:.1f}"
-        painter.drawText(QRectF(0, cy + 2, w, 14), Qt.AlignmentFlag.AlignCenter, change_text)
-
+        # Объём
         painter.setPen(QColor(Theme.TEXT_SECONDARY))
         painter.setFont(QFont(Theme.FONT_FAMILY, 7))
         if self.volume_mode in ("avg_day", "med_day"):
             vol_text = f"{self.volume}/d"
         else:
-            vol_text = f"{self.volume}"
-        painter.drawText(QRectF(0, cy + 16, w, 10), Qt.AlignmentFlag.AlignCenter, vol_text)
+            vol_text = f"{self.volume} sold"
+        painter.drawText(QRectF(0, cy + 7, w, 12), Qt.AlignmentFlag.AlignCenter, vol_text)
 
         painter.end()
 
@@ -285,19 +248,9 @@ class _SingleArcCircle(QWidget):
 
     def mouseMoveEvent(self, event):
         if self._hovered:
-            if self.change_mode == "range":
-                chg_str = f"\u00b1${self.change:.2f}"
-            elif self.change_mode == "abs":
-                sign = "+" if self.change >= 0 else ""
-                chg_str = f"{sign}${abs(self.change):.2f}"
-            else:
-                sign = "+" if self.change >= 0 else ""
-                chg_str = f"{sign}{self.change:.1f}%"
             vol_str = f"{self.volume}/d" if self.volume_mode in ("avg_day", "med_day") else str(self.volume)
-            chg_label = "Range" if self.change_mode == "range" else "Change"
             text = (f"{self.period_label}\n"
                     f"Price: ${self.price_val:.2f}\n"
-                    f"{chg_label}: {chg_str}\n"
                     f"Volume: {vol_str}")
             QToolTip.showText(self.mapToGlobal(event.pos()), text, self)
 
@@ -526,7 +479,6 @@ class ItemInfoDialog(QDialog):
         _s = QSettings("MyCompany", "SteamInventoryApp")
         self._stats_config = {
             "price": _s.value("stats_price_metric", "median", type=str),
-            "change": _s.value("stats_change_metric", "pct", type=str),
             "volume": _s.value("stats_volume_metric", "total", type=str),
         }
 
@@ -787,16 +739,6 @@ class ItemInfoDialog(QDialog):
             action.triggered.connect(lambda _, k=key: self._set_stats("price", k))
             price_group.addAction(action)
 
-        change_menu = menu.addMenu("Change")
-        change_group = QActionGroup(change_menu)
-        for key, label in [("pct", "Percent (%)"), ("abs", "Absolute ($)"),
-                           ("range", "Range ($)")]:
-            action = change_menu.addAction(label)
-            action.setCheckable(True)
-            action.setChecked(self._stats_config["change"] == key)
-            action.triggered.connect(lambda _, k=key: self._set_stats("change", k))
-            change_group.addAction(action)
-
         vol_menu = menu.addMenu("Volume")
         vol_group = QActionGroup(vol_menu)
         for key, label in [("total", "Total"), ("avg_day", "Avg/day"),
@@ -826,18 +768,23 @@ class ItemInfoDialog(QDialog):
             return
 
         cfg = self._stats_config
-        for label, days in [("7d", 7), ("30d", 30), ("90d", 90)]:
+        periods = [("7d", 7), ("30d", 30), ("90d", 90)]
+
+        # Считаем объёмы для всех периодов, чтобы найти max для масштабирования арки
+        period_data = []
+        for label, days in periods:
             data = _filter_by_days(graph, days)
             if not data:
                 continue
-
-            price = _calc_price(data, cfg["price"])
             vol = _calc_volume(data, days, cfg["volume"])
-            chg = _calc_change(data, cfg["change"])
+            period_data.append((label, days, data, vol))
 
+        max_vol = max((v for _, _, _, v in period_data), default=1) or 1
+
+        for label, days, data, vol in period_data:
+            price = _calc_price(data, cfg["price"])
             circle = _SingleArcCircle(
-                label, price, chg, vol,
-                change_mode=cfg["change"],
+                label, price, vol, max_vol,
                 volume_mode=cfg["volume"],
             )
             self._stats_layout.addWidget(circle, alignment=Qt.AlignmentFlag.AlignCenter)
