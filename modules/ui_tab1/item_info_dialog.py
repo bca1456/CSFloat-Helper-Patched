@@ -246,7 +246,7 @@ class _SingleArcCircle(QWidget):
         painter.drawText(QRectF(0, cy - 26, w, 12), Qt.AlignmentFlag.AlignCenter, self.period_label)
 
         painter.setPen(QColor(Theme.PRIMARY))
-        painter.setFont(QFont(Theme.FONT_FAMILY, 11, QFont.Weight.Bold))
+        painter.setFont(QFont(Theme.FONT_FAMILY, 10, QFont.Weight.Bold))
         painter.drawText(QRectF(0, cy - 15, w, 18), Qt.AlignmentFlag.AlignCenter, f"{self.price_val:.2f}")
 
         if self.change_mode == "range":
@@ -265,7 +265,7 @@ class _SingleArcCircle(QWidget):
         painter.drawText(QRectF(0, cy + 2, w, 14), Qt.AlignmentFlag.AlignCenter, change_text)
 
         painter.setPen(QColor(Theme.TEXT_SECONDARY))
-        painter.setFont(QFont(Theme.FONT_FAMILY, 6))
+        painter.setFont(QFont(Theme.FONT_FAMILY, 7))
         if self.volume_mode in ("avg_day", "med_day"):
             vol_text = f"{self.volume}/d"
         else:
@@ -1020,7 +1020,7 @@ class ItemInfoDialog(QDialog):
             self._float_label.setStyleSheet(f"""
                 QPushButton {{
                     background: transparent; border: none;
-                    color: #E85454; text-align: left; padding: 0 2px;
+                    color: #E85454; text-align: left; padding: 0 4px;
                 }}
                 QPushButton:hover {{ color: {Theme.PRIMARY}; }}
             """)
@@ -1030,7 +1030,7 @@ class ItemInfoDialog(QDialog):
             self._float_label.setStyleSheet(f"""
                 QPushButton {{
                     background: transparent; border: none;
-                    color: {Theme.TEXT_SECONDARY}; text-align: left; padding: 0 2px;
+                    color: {Theme.TEXT_SECONDARY}; text-align: left; padding: 0 4px;
                 }}
             """)
 
@@ -1169,7 +1169,7 @@ class ItemInfoDialog(QDialog):
         self._sales_table.horizontalHeader().setStyleSheet(Theme.table_header_style())
         self._sales_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._sales_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self._sales_table.verticalHeader().setDefaultSectionSize(24)
+        self._sales_table.verticalHeader().setDefaultSectionSize(28)
         self._sales_table.verticalHeader().setVisible(False)
         self._sales_table.setAlternatingRowColors(True)
 
@@ -1198,15 +1198,14 @@ class ItemInfoDialog(QDialog):
 
             p = QTableWidgetItem(cents_to_dollars(price))
             p.setForeground(QColor(Theme.PRIMARY))
-            p.setFont(QFont(Theme.FONT_FAMILY, Theme.FONT_SIZE_SMALL))
+            p.setFont(QFont(Theme.FONT_FAMILY, Theme.FONT_SIZE, QFont.Weight.Bold))
             tbl.setItem(r, 0, p)
 
             f = QTableWidgetItem(f"{fv:.12f}")
-            f.setFont(QFont(Theme.FONT_FAMILY, 8))
+            f.setFont(QFont(Theme.FONT_FAMILY, Theme.FONT_SIZE_SMALL))
             tbl.setItem(r, 1, f)
 
             s = QTableWidgetItem(str(seed))
-            s.setFont(QFont(Theme.FONT_FAMILY, 8))
             tbl.setItem(r, 2, s)
 
             tbl.setItem(r, 3, QTableWidgetItem(days_ago(sold)))
