@@ -162,8 +162,18 @@ def parse_order_expression(expression, def_index, paint_index):
 # Arc circle widget
 # ═══════════════════════════════════════════════════════════════════
 
+def _interpolate_color(c1, c2, t):
+    """Линейная интерполяция между двумя QColor, t: 0..1."""
+    return QColor(
+        int(c1.red() + (c2.red() - c1.red()) * t),
+        int(c1.green() + (c2.green() - c1.green()) * t),
+        int(c1.blue() + (c2.blue() - c1.blue()) * t),
+        int(c1.alpha() + (c2.alpha() - c1.alpha()) * t),
+    )
+
+
 class _SingleArcCircle(QWidget):
-    """Круг статистики. Арка = стабильность цены, центр = объём."""
+    """Круг статистики. Градиентная арка = стабильность, центр = объём."""
 
     def __init__(self, label, price_val, volume, stability,
                  volume_mode="total", parent=None):
@@ -171,7 +181,6 @@ class _SingleArcCircle(QWidget):
         self.period_label = label
         self.price_val = price_val
         self.volume = volume
-        # stability: 0 = идеально стабильно, 1+ = волатильно
         self.stability = stability
         self.volume_mode = volume_mode
         self._hovered = False
@@ -197,32 +206,45 @@ class _SingleArcCircle(QWidget):
         painter.setPen(QPen(track_color, arc_thickness, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
         painter.drawArc(rect, int(start_angle_deg * 16), int(-max_sweep * 16))
 
-        # Арка = стабильность. 0% разброс → пустая, 100%+ → полная
-        # Порог: stability >= 1.0 (разброс >= 100% от медианы) → полная арка
-        fill_ratio = min(self.stability / 1.0, 1.0)
+        # Заполнение: CV (std_dev/mean), масштаб 0–50% → 0–100%
+        fill_ratio = min(self.stability / 0.5, 1.0)
         sweep = max_sweep * fill_ratio
 
-        # Цвет: зелёный (стабильно) → жёлтый → красный (волатильно)
-        if self.stability < 0.15:
-            arc_color = QColor("#4CAF50")
-        elif self.stability < 0.4:
-            arc_color = QColor("#FFA726")
-        else:
-            arc_color = QColor("#E85454")
-
-        if self._hovered:
-            arc_color = arc_color.lighter(120)
-        thickness = arc_thickness + (1 if self._hovered else 0)
-        painter.setPen(QPen(arc_color, thickness, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-        painter.drawArc(rect, int(start_angle_deg * 16), int(-sweep * 16))
-
-        # Точка на конце арки
+        # Градиентная арка (сегментами)
         if sweep > 0:
+            primary = QColor(Theme.PRIMARY)
+            start_color = QColor(primary)
+            start_color.setAlpha(60)
+            end_color = QColor(primary)
+            if self._hovered:
+                start_color = start_color.lighter(120)
+                end_color = end_color.lighter(120)
+
+            thickness = arc_thickness + (1 if self._hovered else 0)
+            n_seg = max(int(sweep / 4), 2)
+            seg_sweep = sweep / n_seg
+
+            for i in range(n_seg):
+                t = i / max(n_seg - 1, 1)
+                color = _interpolate_color(start_color, end_color, t)
+                angle = start_angle_deg - seg_sweep * i
+                painter.setPen(QPen(color, thickness, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
+                # Небольшой overlap для бесшовности
+                painter.drawArc(rect, int(angle * 16), int(-(seg_sweep + 0.5) * 16))
+
+            # Скруглённые концы
+            painter.setPen(QPen(start_color, thickness, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            painter.drawArc(rect, int(start_angle_deg * 16), int(-1 * 16))
+            painter.setPen(QPen(end_color, thickness, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            end_angle = start_angle_deg - sweep
+            painter.drawArc(rect, int((end_angle + 1) * 16), int(-1 * 16))
+
+            # Точка на конце арки
             end_rad = math.radians(start_angle_deg - sweep)
             dot_x = cx + radius * math.cos(end_rad)
             dot_y = cy - radius * math.sin(end_rad)
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QBrush(arc_color))
+            painter.setBrush(QBrush(end_color))
             painter.drawEllipse(QPointF(dot_x, dot_y), 2.5, 2.5)
 
         # Период
@@ -788,10 +810,14 @@ class ItemInfoDialog(QDialog):
             price = _calc_price(data, cfg["price"])
             vol = _calc_volume(data, days, cfg["volume"])
 
-            # Стабильность: (max - min) / median. 0 = идеально стабильно
+            # Стабильность: coefficient of variation (std_dev / mean)
             prices = [d["avg_price"] for d in data]
-            med = statistics.median(prices)
-            stability = (max(prices) - min(prices)) / med if med else 0
+            mean_p = statistics.mean(prices)
+            if mean_p and len(prices) > 1:
+                std_dev = statistics.stdev(prices)
+                stability = std_dev / mean_p
+            else:
+                stability = 0
 
             circle = _SingleArcCircle(
                 label, price, vol, stability,
