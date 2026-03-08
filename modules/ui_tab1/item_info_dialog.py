@@ -51,21 +51,6 @@ def _filter_by_days(graph, days):
     return result
 
 
-def _filter_by_day_range(graph, days_start, days_end):
-    """Фильтрует записи от days_start до days_end дней назад."""
-    today = datetime.now(timezone.utc).date()
-    cutoff_recent = today - timedelta(days=days_start)
-    cutoff_old = today - timedelta(days=days_end)
-    result = []
-    for d in graph:
-        try:
-            dt = datetime.fromisoformat(d["day"].replace("Z", "+00:00")).date()
-            if cutoff_old <= dt < cutoff_recent:
-                result.append(d)
-        except Exception:
-            continue
-    return result
-
 
 STATS_SETTINGS_KEYS = {
     "price": "stats_price_metric",
@@ -90,19 +75,24 @@ def _calc_price(data, metric):
     return statistics.median(prices) / 100
 
 
-def _calc_change(data, prev_data, metric):
+def _calc_change(data, metric):
+    """Change внутри периода: первая половина vs вторая (тренд)."""
+    if not data:
+        return 0
     if metric == "range":
-        if not data:
-            return 0
         prices = [d["avg_price"] for d in data]
         return (max(prices) - min(prices)) / 100
-    if not prev_data or not data:
+    # Делим период пополам: старая половина vs свежая
+    mid = len(data) // 2
+    if mid == 0:
         return 0
-    med_cur = statistics.median(d["avg_price"] for d in data)
-    med_prev = statistics.median(d["avg_price"] for d in prev_data)
+    old_half = data[:mid]
+    new_half = data[mid:]
+    med_old = statistics.median(d["avg_price"] for d in old_half)
+    med_new = statistics.median(d["avg_price"] for d in new_half)
     if metric == "abs":
-        return (med_cur - med_prev) / 100
-    return (med_cur - med_prev) / med_prev * 100 if med_prev else 0
+        return (med_new - med_old) / 100
+    return (med_new - med_old) / med_old * 100 if med_old else 0
 
 
 def _calc_volume(data, days, metric):
@@ -843,9 +833,7 @@ class ItemInfoDialog(QDialog):
 
             price = _calc_price(data, cfg["price"])
             vol = _calc_volume(data, days, cfg["volume"])
-
-            prev_data = _filter_by_day_range(graph, days, days * 2)
-            chg = _calc_change(data, prev_data, cfg["change"])
+            chg = _calc_change(data, cfg["change"])
 
             circle = _SingleArcCircle(
                 label, price, chg, vol,
