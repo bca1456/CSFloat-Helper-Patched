@@ -87,33 +87,45 @@ def _calc_volume(data, days, metric):
     return total
 
 
+def _robust_cv(prices):
+    """Робастный коэффициент вариации через MAD (median absolute deviation)."""
+    if len(prices) < 2:
+        return 0
+    med = statistics.median(prices)
+    if not med:
+        return 0
+    mad = statistics.median(abs(p - med) for p in prices)
+    return mad / med
+
+
 def _calc_score(data, days, metric):
     prices = [d["avg_price"] for d in data]
     total_vol = sum(d["count"] for d in data)
     daily_vol = total_vol / days if days else 0
-    mean_p = statistics.mean(prices) if prices else 0
-    price_usd = mean_p / 100
-    cv = statistics.stdev(prices) / mean_p if mean_p and len(prices) > 1 else 0
+    med_p = statistics.median(prices) if prices else 0
+    price_usd = med_p / 100
+    cv = _robust_cv(prices)
+    # 1/(1+cv) — плавное снижение, никогда не обнуляется
+    stability = 1 / (1 + cv)
 
     if metric == "trade":
         base = math.log(1 + daily_vol) * math.log(1 + price_usd)
-        return round(base * (1 - min(cv, 1.0)) * 10, 1)
+        return round(base * stability * 10, 1)
     # market (default)
-    return round(math.log(1 + daily_vol) * (1 - min(cv, 1.0)), 2)
+    return round(math.log(1 + daily_vol) * stability, 2)
 
 
 def _calc_volatility(data, metric):
     prices = [d["avg_price"] for d in data]
     if len(prices) < 2:
         return 0
-    mean_p = statistics.mean(prices)
-    if not mean_p:
+    med = statistics.median(prices)
+    if not med:
         return 0
     if metric == "range_pct":
-        med = statistics.median(prices)
-        return (max(prices) - min(prices)) / med if med else 0
-    # cv (default)
-    return statistics.stdev(prices) / mean_p
+        return (max(prices) - min(prices)) / med
+    # cv (default) — MAD-based, устойчив к выбросам
+    return _robust_cv(prices)
 
 
 def days_ago(iso_str):
@@ -303,10 +315,10 @@ class _SingleArcCircle(QWidget):
         painter.setFont(QFont(Theme.FONT_FAMILY, 7))
         painter.drawText(QRectF(0, cy + 7, w, 10), Qt.AlignmentFlag.AlignCenter, self._fmt_volatility())
 
-        # Period label — внизу в разрыве арки
+        # Period label — в центре разрыва арки (270° = самый низ)
         painter.setPen(QColor(Theme.TEXT_SECONDARY))
         painter.setFont(QFont(Theme.FONT_FAMILY, 7, QFont.Weight.Bold))
-        painter.drawText(QRectF(0, cy + radius - 4, w, 14), Qt.AlignmentFlag.AlignCenter, self.period_label)
+        painter.drawText(QRectF(0, cy + radius - 8, w, 12), Qt.AlignmentFlag.AlignCenter, self.period_label)
 
         painter.end()
 
