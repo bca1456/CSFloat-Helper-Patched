@@ -12,7 +12,8 @@ from PyQt6.QtWidgets import (
     QAbstractItemView, QFrame, QLineEdit, QToolTip, QMenu,
 )
 from PyQt6.QtGui import QFont, QColor, QPainter, QPen, QPainterPath, QBrush, QPixmap
-from PyQt6.QtCore import Qt, QRect, QPointF, QTimer, QRectF, QThreadPool
+from PyQt6.QtCore import Qt, QRect, QPointF, QTimer, QRectF, QThreadPool, QSettings
+from PyQt6.QtGui import QActionGroup
 
 from modules.theme import Theme
 from modules.loading_spinner import LoadingOverlay
@@ -64,6 +65,41 @@ def _filter_by_day_range(graph, days_start, days_end):
         except Exception:
             continue
     return result
+
+
+STATS_SETTINGS_KEYS = {
+    "price": "stats_price_metric",
+    "change": "stats_change_metric",
+    "volume": "stats_volume_metric",
+}
+
+
+def _calc_price(data, metric):
+    prices = [d["avg_price"] for d in data]
+    if metric == "average":
+        return statistics.mean(prices) / 100
+    if metric == "min":
+        return min(prices) / 100
+    if metric == "max":
+        return max(prices) / 100
+    return statistics.median(prices) / 100
+
+
+def _calc_change(data, prev_data, metric):
+    if not prev_data or not data:
+        return 0
+    med_cur = statistics.median(d["avg_price"] for d in data)
+    med_prev = statistics.median(d["avg_price"] for d in prev_data)
+    if metric == "abs":
+        return (med_cur - med_prev) / 100
+    return (med_cur - med_prev) / med_prev * 100 if med_prev else 0
+
+
+def _calc_volume(data, days, metric):
+    total = sum(d["count"] for d in data)
+    if metric == "avg_day":
+        return round(total / days, 1) if days else 0
+    return total
 
 
 def days_ago(iso_str):
@@ -145,12 +181,15 @@ def parse_order_expression(expression, def_index, paint_index):
 
 class _SingleArcCircle(QWidget):
 
-    def __init__(self, label, median, change, volume, parent=None):
+    def __init__(self, label, price_val, change, volume,
+                 change_mode="pct", volume_mode="total", parent=None):
         super().__init__(parent)
         self.period_label = label
-        self.median = median
+        self.price_val = price_val
         self.change = change
         self.volume = volume
+        self.change_mode = change_mode
+        self.volume_mode = volume_mode
         self._hovered = False
         self.setMouseTracking(True)
         self.setFixedSize(80, 80)
@@ -197,16 +236,24 @@ class _SingleArcCircle(QWidget):
 
         painter.setPen(QColor(Theme.PRIMARY))
         painter.setFont(QFont(Theme.FONT_FAMILY, 11, QFont.Weight.Bold))
-        painter.drawText(QRectF(0, cy - 15, w, 18), Qt.AlignmentFlag.AlignCenter, f"{self.median:.2f}")
+        painter.drawText(QRectF(0, cy - 15, w, 18), Qt.AlignmentFlag.AlignCenter, f"{self.price_val:.2f}")
 
         painter.setPen(QColor("#4CAF50") if self.change >= 0 else QColor("#E85454"))
         painter.setFont(QFont(Theme.FONT_FAMILY, 8, QFont.Weight.Bold))
         sign = "+" if self.change >= 0 else ""
-        painter.drawText(QRectF(0, cy + 2, w, 14), Qt.AlignmentFlag.AlignCenter, f"{sign}{self.change:.1f}")
+        if self.change_mode == "abs":
+            change_text = f"{sign}${abs(self.change):.2f}"
+        else:
+            change_text = f"{sign}{self.change:.1f}"
+        painter.drawText(QRectF(0, cy + 2, w, 14), Qt.AlignmentFlag.AlignCenter, change_text)
 
         painter.setPen(QColor(Theme.TEXT_SECONDARY))
         painter.setFont(QFont(Theme.FONT_FAMILY, 6))
-        painter.drawText(QRectF(0, cy + 16, w, 10), Qt.AlignmentFlag.AlignCenter, f"{self.volume}")
+        if self.volume_mode == "avg_day":
+            vol_text = f"{self.volume}/d"
+        else:
+            vol_text = f"{self.volume}"
+        painter.drawText(QRectF(0, cy + 16, w, 10), Qt.AlignmentFlag.AlignCenter, vol_text)
 
         painter.end()
 
@@ -221,10 +268,16 @@ class _SingleArcCircle(QWidget):
 
     def mouseMoveEvent(self, event):
         if self._hovered:
+            sign = "+" if self.change >= 0 else ""
+            if self.change_mode == "abs":
+                chg_str = f"{sign}${abs(self.change):.2f}"
+            else:
+                chg_str = f"{sign}{self.change:.1f}%"
+            vol_str = f"{self.volume}/d" if self.volume_mode == "avg_day" else str(self.volume)
             text = (f"{self.period_label}\n"
-                    f"Median: ${self.median:.2f}\n"
-                    f"Change: {'+' if self.change >= 0 else ''}{self.change:.1f}%\n"
-                    f"Volume: {self.volume}")
+                    f"Price: ${self.price_val:.2f}\n"
+                    f"Change: {chg_str}\n"
+                    f"Volume: {vol_str}")
             QToolTip.showText(self.mapToGlobal(event.pos()), text, self)
 
 
@@ -448,6 +501,14 @@ class ItemInfoDialog(QDialog):
         self._graph_data = []
         self._pending_requests = 0
 
+        # Настройки статистики
+        _s = QSettings("MyCompany", "SteamInventoryApp")
+        self._stats_config = {
+            "price": _s.value("stats_price_metric", "median", type=str),
+            "change": _s.value("stats_change_metric", "pct", type=str),
+            "volume": _s.value("stats_volume_metric", "total", type=str),
+        }
+
         self.setWindowTitle(self.item_name)
         self.resize(636, 680)
         self.setMinimumSize(600, 550)
@@ -663,6 +724,20 @@ class ItemInfoDialog(QDialog):
 
         outer.addLayout(filters_col)
 
+        # Кнопка настроек статистики
+        self._stats_btn = QPushButton("\u2699")
+        self._stats_btn.setFixedSize(20, 20)
+        self._stats_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._stats_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; border: none;
+                color: {Theme.TEXT_SECONDARY}; font-size: 12pt;
+            }}
+            QPushButton:hover {{ color: {Theme.PRIMARY}; }}
+        """)
+        self._stats_btn.clicked.connect(self._show_stats_menu)
+        outer.addWidget(self._stats_btn, alignment=Qt.AlignmentFlag.AlignTop)
+
         # Stats placeholder — заполнится после загрузки graph
         self._stats_container = QWidget()
         self._stats_container.setFixedSize(260, 80)
@@ -673,8 +748,48 @@ class ItemInfoDialog(QDialog):
 
         return outer
 
+    def _show_stats_menu(self):
+        menu = QMenu(self)
+        menu.setStyleSheet(Theme.menu_style())
+
+        price_menu = menu.addMenu("Price")
+        price_group = QActionGroup(price_menu)
+        for key, label in [("median", "Median"), ("average", "Average"),
+                           ("min", "Min"), ("max", "Max")]:
+            action = price_menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(self._stats_config["price"] == key)
+            action.triggered.connect(lambda _, k=key: self._set_stats("price", k))
+            price_group.addAction(action)
+
+        change_menu = menu.addMenu("Change")
+        change_group = QActionGroup(change_menu)
+        for key, label in [("pct", "Percent (%)"), ("abs", "Absolute ($)")]:
+            action = change_menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(self._stats_config["change"] == key)
+            action.triggered.connect(lambda _, k=key: self._set_stats("change", k))
+            change_group.addAction(action)
+
+        vol_menu = menu.addMenu("Volume")
+        vol_group = QActionGroup(vol_menu)
+        for key, label in [("total", "Total"), ("avg_day", "Avg/day")]:
+            action = vol_menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(self._stats_config["volume"] == key)
+            action.triggered.connect(lambda _, k=key: self._set_stats("volume", k))
+            vol_group.addAction(action)
+
+        menu.exec(self._stats_btn.mapToGlobal(self._stats_btn.rect().bottomLeft()))
+
+    def _set_stats(self, category, value):
+        self._stats_config[category] = value
+        QSettings("MyCompany", "SteamInventoryApp").setValue(
+            STATS_SETTINGS_KEYS[category], value
+        )
+        self._rebuild_stats(self._graph_data)
+
     def _rebuild_stats(self, graph):
-        # Очищаем предыдущие виджеты
         while self._stats_layout.count():
             child = self._stats_layout.takeAt(0)
             if child.widget():
@@ -683,23 +798,23 @@ class ItemInfoDialog(QDialog):
         if not graph:
             return
 
+        cfg = self._stats_config
         for label, days in [("7d", 7), ("30d", 30), ("90d", 90)]:
             data = _filter_by_days(graph, days)
             if not data:
                 continue
-            med = statistics.median(d["avg_price"] for d in data) / 100
-            vol = sum(d["count"] for d in data)
 
-            # Change: медиана текущего периода vs медиана предыдущего
+            price = _calc_price(data, cfg["price"])
+            vol = _calc_volume(data, days, cfg["volume"])
+
             prev_data = _filter_by_day_range(graph, days, days * 2)
-            if prev_data and data:
-                med_current = statistics.median(d["avg_price"] for d in data)
-                med_prev = statistics.median(d["avg_price"] for d in prev_data)
-                chg = (med_current - med_prev) / med_prev * 100 if med_prev else 0
-            else:
-                chg = 0
+            chg = _calc_change(data, prev_data, cfg["change"])
 
-            circle = _SingleArcCircle(label, med, chg, vol)
+            circle = _SingleArcCircle(
+                label, price, chg, vol,
+                change_mode=cfg["change"],
+                volume_mode=cfg["volume"],
+            )
             self._stats_layout.addWidget(circle, alignment=Qt.AlignmentFlag.AlignCenter)
 
     def _build_switchable_filter(self, lay, input_h, label_w=58):
