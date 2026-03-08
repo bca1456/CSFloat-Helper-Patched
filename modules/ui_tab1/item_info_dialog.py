@@ -61,7 +61,8 @@ STATS_SETTINGS_KEYS = {
 
 
 def _calc_price(data, metric):
-    prices = [d["avg_price"] for d in data]
+    raw_prices = [d["avg_price"] for d in data]
+    prices = _clean_prices(raw_prices)
     if metric == "average":
         return statistics.mean(prices) / 100
     if metric == "min":
@@ -69,10 +70,19 @@ def _calc_price(data, metric):
     if metric == "max":
         return max(prices) / 100
     if metric == "weighted":
-        total_vol = sum(d["count"] for d in data)
+        # Weighted использует raw данные, но с IQR-порогом
+        sorted_p = sorted(raw_prices)
+        n = len(sorted_p)
+        if n >= 4:
+            q1, q3 = sorted_p[n // 4], sorted_p[3 * n // 4]
+            upper = q3 + 1.5 * (q3 - q1)
+            filtered = [(d["avg_price"], d["count"]) for d in data if d["avg_price"] <= upper]
+        else:
+            filtered = [(d["avg_price"], d["count"]) for d in data]
+        total_vol = sum(c for _, c in filtered)
         if total_vol == 0:
             return statistics.median(prices) / 100
-        return sum(d["avg_price"] * d["count"] for d in data) / total_vol / 100
+        return sum(p * c for p, c in filtered) / total_vol / 100
     return statistics.median(prices) / 100
 
 
@@ -87,25 +97,33 @@ def _calc_volume(data, days, metric):
     return total
 
 
-def _robust_cv(prices):
-    """Робастный коэффициент вариации через MAD (median absolute deviation)."""
-    if len(prices) < 2:
-        return 0
-    med = statistics.median(prices)
-    if not med:
-        return 0
-    mad = statistics.median(abs(p - med) for p in prices)
-    return mad / med
+def _clean_prices(prices):
+    """IQR-фильтрация выбросов. Возвращает цены без аномалий."""
+    if len(prices) < 4:
+        return prices
+    sorted_p = sorted(prices)
+    n = len(sorted_p)
+    q1 = sorted_p[n // 4]
+    q3 = sorted_p[3 * n // 4]
+    iqr = q3 - q1
+    lower = q1 - 1.5 * iqr
+    upper = q3 + 1.5 * iqr
+    cleaned = [p for p in prices if lower <= p <= upper]
+    return cleaned if cleaned else prices
 
 
 def _calc_score(data, days, metric):
-    prices = [d["avg_price"] for d in data]
+    raw_prices = [d["avg_price"] for d in data]
+    prices = _clean_prices(raw_prices)
     total_vol = sum(d["count"] for d in data)
     daily_vol = total_vol / days if days else 0
-    med_p = statistics.median(prices) if prices else 0
+    med_p = statistics.median(prices)
     price_usd = med_p / 100
-    cv = _robust_cv(prices)
-    # 1/(1+cv) — плавное снижение, никогда не обнуляется
+
+    # CV на очищенных данных
+    cv = 0
+    if med_p and len(prices) > 1:
+        cv = statistics.stdev(prices) / statistics.mean(prices)
     stability = 1 / (1 + cv)
 
     if metric == "trade":
@@ -116,7 +134,8 @@ def _calc_score(data, days, metric):
 
 
 def _calc_volatility(data, metric):
-    prices = [d["avg_price"] for d in data]
+    raw_prices = [d["avg_price"] for d in data]
+    prices = _clean_prices(raw_prices)
     if len(prices) < 2:
         return 0
     med = statistics.median(prices)
@@ -124,8 +143,8 @@ def _calc_volatility(data, metric):
         return 0
     if metric == "range_pct":
         return (max(prices) - min(prices)) / med
-    # cv (default) — MAD-based, устойчив к выбросам
-    return _robust_cv(prices)
+    # cv (default)
+    return statistics.stdev(prices) / statistics.mean(prices) if statistics.mean(prices) else 0
 
 
 def days_ago(iso_str):
