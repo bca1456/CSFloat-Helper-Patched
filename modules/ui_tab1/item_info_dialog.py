@@ -53,8 +53,10 @@ def _filter_by_days(graph, days):
 
 
 STATS_SETTINGS_KEYS = {
+    "score": "stats_score_metric",
     "price": "stats_price_metric",
     "volume": "stats_volume_metric",
+    "volatility": "stats_volatility_metric",
 }
 
 
@@ -83,6 +85,35 @@ def _calc_volume(data, days, metric):
         daily = [d["count"] for d in data]
         return round(statistics.median(daily), 1) if daily else 0
     return total
+
+
+def _calc_score(data, days, metric):
+    prices = [d["avg_price"] for d in data]
+    total_vol = sum(d["count"] for d in data)
+    daily_vol = total_vol / days if days else 0
+    mean_p = statistics.mean(prices) if prices else 0
+    price_usd = mean_p / 100
+    cv = statistics.stdev(prices) / mean_p if mean_p and len(prices) > 1 else 0
+
+    if metric == "trade":
+        base = math.log(1 + daily_vol) * math.log(1 + price_usd)
+        return round(base * (1 - min(cv, 1.0)) * 10, 1)
+    # market (default)
+    return round(math.log(1 + daily_vol) * (1 - min(cv, 1.0)), 2)
+
+
+def _calc_volatility(data, metric):
+    prices = [d["avg_price"] for d in data]
+    if len(prices) < 2:
+        return 0
+    mean_p = statistics.mean(prices)
+    if not mean_p:
+        return 0
+    if metric == "range_pct":
+        med = statistics.median(prices)
+        return (max(prices) - min(prices)) / med if med else 0
+    # cv (default)
+    return statistics.stdev(prices) / mean_p
 
 
 def days_ago(iso_str):
@@ -173,20 +204,30 @@ def _interpolate_color(c1, c2, t):
 
 
 class _SingleArcCircle(QWidget):
-    """Круг статистики. Градиентная арка = стабильность, центр = объём."""
+    """Круг: арка = ликвидность (gradient), центр = score, price, volatility."""
 
-    def __init__(self, label, price_val, volume, stability,
-                 volume_mode="total", parent=None):
+    def __init__(self, label, score, price_val, volatility, volume, max_volume,
+                 score_mode="market", vol_mode="total", volatility_mode="cv",
+                 parent=None):
         super().__init__(parent)
         self.period_label = label
+        self.score = score
         self.price_val = price_val
+        self.volatility = volatility
         self.volume = volume
-        self.stability = stability
-        self.volume_mode = volume_mode
+        self.max_volume = max_volume
+        self.score_mode = score_mode
+        self.vol_mode = vol_mode
+        self.volatility_mode = volatility_mode
         self._hovered = False
         self.setMouseTracking(True)
         self.setFixedSize(80, 80)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def _fmt_volatility(self):
+        if self.volatility_mode == "range_pct":
+            return f"\u00b1{self.volatility * 100:.0f}%"
+        return f"CV {self.volatility * 100:.0f}%"
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -201,16 +242,16 @@ class _SingleArcCircle(QWidget):
 
         rect = QRectF(cx - radius, cy - radius, radius * 2, radius * 2)
 
-        # Трек (фон арки)
+        # Трек (фон)
         track_color = QColor(Theme.BG_LIGHT) if not self._hovered else QColor(Theme.BG_HOVER)
         painter.setPen(QPen(track_color, arc_thickness, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
         painter.drawArc(rect, int(start_angle_deg * 16), int(-max_sweep * 16))
 
-        # Заполнение: CV (std_dev/mean), масштаб 0–50% → 0–100%
-        fill_ratio = min(self.stability / 0.5, 1.0)
+        # Арка = volume / max_volume
+        fill_ratio = min(self.volume / self.max_volume, 1.0) if self.max_volume > 0 else 0
         sweep = max_sweep * fill_ratio
 
-        # Градиентная арка (сегментами)
+        # Градиентная арка
         if sweep > 0:
             primary = QColor(Theme.PRIMARY)
             start_color = QColor(primary)
@@ -229,7 +270,6 @@ class _SingleArcCircle(QWidget):
                 color = _interpolate_color(start_color, end_color, t)
                 angle = start_angle_deg - seg_sweep * i
                 painter.setPen(QPen(color, thickness, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
-                # Небольшой overlap для бесшовности
                 painter.drawArc(rect, int(angle * 16), int(-(seg_sweep + 0.5) * 16))
 
             # Скруглённые концы
@@ -239,7 +279,7 @@ class _SingleArcCircle(QWidget):
             end_angle = start_angle_deg - sweep
             painter.drawArc(rect, int((end_angle + 1) * 16), int(-1 * 16))
 
-            # Точка на конце арки
+            # Точка на конце
             end_rad = math.radians(start_angle_deg - sweep)
             dot_x = cx + radius * math.cos(end_rad)
             dot_y = cy - radius * math.sin(end_rad)
@@ -247,24 +287,26 @@ class _SingleArcCircle(QWidget):
             painter.setBrush(QBrush(end_color))
             painter.drawEllipse(QPointF(dot_x, dot_y), 2.5, 2.5)
 
-        # Период
-        painter.setPen(QColor(Theme.TEXT_SECONDARY))
-        painter.setFont(QFont(Theme.FONT_FAMILY, 7))
-        painter.drawText(QRectF(0, cy - 22, w, 12), Qt.AlignmentFlag.AlignCenter, self.period_label)
-
-        # Объём (центр, крупно)
+        # Score (центр, крупно)
         painter.setPen(QColor(Theme.PRIMARY))
         painter.setFont(QFont(Theme.FONT_FAMILY, 10, QFont.Weight.Bold))
-        if self.volume_mode in ("avg_day", "med_day"):
-            vol_text = f"{self.volume}/d"
-        else:
-            vol_text = str(self.volume)
-        painter.drawText(QRectF(0, cy - 11, w, 18), Qt.AlignmentFlag.AlignCenter, vol_text)
+        score_text = f"{self.score:.1f}" if self.score >= 10 else f"{self.score:.2f}"
+        painter.drawText(QRectF(0, cy - 20, w, 16), Qt.AlignmentFlag.AlignCenter, score_text)
 
-        # Цена (под объёмом, мельче)
+        # Price (под score)
         painter.setPen(QColor(Theme.TEXT_SECONDARY))
         painter.setFont(QFont(Theme.FONT_FAMILY, 8))
-        painter.drawText(QRectF(0, cy + 7, w, 12), Qt.AlignmentFlag.AlignCenter, f"${self.price_val:.2f}")
+        painter.drawText(QRectF(0, cy - 5, w, 12), Qt.AlignmentFlag.AlignCenter, f"${self.price_val:.2f}")
+
+        # Volatility (под price)
+        painter.setPen(QColor(Theme.TEXT_SECONDARY))
+        painter.setFont(QFont(Theme.FONT_FAMILY, 7))
+        painter.drawText(QRectF(0, cy + 7, w, 10), Qt.AlignmentFlag.AlignCenter, self._fmt_volatility())
+
+        # Period label — внизу в разрыве арки
+        painter.setPen(QColor(Theme.TEXT_SECONDARY))
+        painter.setFont(QFont(Theme.FONT_FAMILY, 7, QFont.Weight.Bold))
+        painter.drawText(QRectF(0, cy + radius - 4, w, 14), Qt.AlignmentFlag.AlignCenter, self.period_label)
 
         painter.end()
 
@@ -279,12 +321,13 @@ class _SingleArcCircle(QWidget):
 
     def mouseMoveEvent(self, event):
         if self._hovered:
-            vol_str = f"{self.volume}/d" if self.volume_mode in ("avg_day", "med_day") else str(self.volume)
-            stab_pct = f"{self.stability * 100:.0f}%"
+            vol_str = f"{self.volume}/d" if self.vol_mode in ("avg_day", "med_day") else str(self.volume)
+            score_label = "Trade Rating" if self.score_mode == "trade" else "Market Score"
             text = (f"{self.period_label}\n"
+                    f"{score_label}: {self.score:.2f}\n"
                     f"Price: ${self.price_val:.2f}\n"
                     f"Volume: {vol_str}\n"
-                    f"Volatility: {stab_pct}")
+                    f"Volatility: {self._fmt_volatility()}")
             QToolTip.showText(self.mapToGlobal(event.pos()), text, self)
 
 
@@ -511,8 +554,10 @@ class ItemInfoDialog(QDialog):
         # Настройки статистики
         _s = QSettings("MyCompany", "SteamInventoryApp")
         self._stats_config = {
+            "score": _s.value("stats_score_metric", "market", type=str),
             "price": _s.value("stats_price_metric", "median", type=str),
             "volume": _s.value("stats_volume_metric", "total", type=str),
+            "volatility": _s.value("stats_volatility_metric", "cv", type=str),
         }
 
         self.setWindowTitle(self.item_name)
@@ -762,6 +807,15 @@ class ItemInfoDialog(QDialog):
         menu = QMenu(self)
         menu.setStyleSheet(Theme.menu_style())
 
+        score_menu = menu.addMenu("Score")
+        score_group = QActionGroup(score_menu)
+        for key, label in [("market", "Market Score"), ("trade", "Trade Rating")]:
+            action = score_menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(self._stats_config["score"] == key)
+            action.triggered.connect(lambda _, k=key: self._set_stats("score", k))
+            score_group.addAction(action)
+
         price_menu = menu.addMenu("Price")
         price_group = QActionGroup(price_menu)
         for key, label in [("median", "Median"), ("average", "Average"),
@@ -781,6 +835,15 @@ class ItemInfoDialog(QDialog):
             action.setChecked(self._stats_config["volume"] == key)
             action.triggered.connect(lambda _, k=key: self._set_stats("volume", k))
             vol_group.addAction(action)
+
+        volat_menu = menu.addMenu("Volatility")
+        volat_group = QActionGroup(volat_menu)
+        for key, label in [("cv", "CV (std/mean)"), ("range_pct", "Range (max-min)/med")]:
+            action = volat_menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(self._stats_config["volatility"] == key)
+            action.triggered.connect(lambda _, k=key: self._set_stats("volatility", k))
+            volat_group.addAction(action)
 
         menu.exec(self._stats_btn.mapToGlobal(self._stats_btn.rect().bottomLeft()))
 
@@ -802,26 +865,27 @@ class ItemInfoDialog(QDialog):
 
         cfg = self._stats_config
 
-        for label, days in [("7d", 7), ("30d", 30), ("90d", 90)]:
+        periods = [("7d", 7), ("30d", 30), ("90d", 90)]
+        period_data = []
+        for label, days in periods:
             data = _filter_by_days(graph, days)
             if not data:
                 continue
-
-            price = _calc_price(data, cfg["price"])
             vol = _calc_volume(data, days, cfg["volume"])
+            period_data.append((label, days, data, vol))
 
-            # Стабильность: coefficient of variation (std_dev / mean)
-            prices = [d["avg_price"] for d in data]
-            mean_p = statistics.mean(prices)
-            if mean_p and len(prices) > 1:
-                std_dev = statistics.stdev(prices)
-                stability = std_dev / mean_p
-            else:
-                stability = 0
+        max_vol = max((v for _, _, _, v in period_data), default=1) or 1
+
+        for label, days, data, vol in period_data:
+            price = _calc_price(data, cfg["price"])
+            score = _calc_score(data, days, cfg["score"])
+            volatility = _calc_volatility(data, cfg["volatility"])
 
             circle = _SingleArcCircle(
-                label, price, vol, stability,
-                volume_mode=cfg["volume"],
+                label, score, price, volatility, vol, max_vol,
+                score_mode=cfg["score"],
+                vol_mode=cfg["volume"],
+                volatility_mode=cfg["volatility"],
             )
             self._stats_layout.addWidget(circle, alignment=Qt.AlignmentFlag.AlignCenter)
 
