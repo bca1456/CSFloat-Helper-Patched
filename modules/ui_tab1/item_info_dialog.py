@@ -163,15 +163,16 @@ def parse_order_expression(expression, def_index, paint_index):
 # ═══════════════════════════════════════════════════════════════════
 
 class _SingleArcCircle(QWidget):
-    """Круг статистики. Арка = ликвидность (объём продаж)."""
+    """Круг статистики. Арка = стабильность цены, центр = объём."""
 
-    def __init__(self, label, price_val, volume, max_volume,
+    def __init__(self, label, price_val, volume, stability,
                  volume_mode="total", parent=None):
         super().__init__(parent)
         self.period_label = label
         self.price_val = price_val
         self.volume = volume
-        self.max_volume = max_volume
+        # stability: 0 = идеально стабильно, 1+ = волатильно
+        self.stability = stability
         self.volume_mode = volume_mode
         self._hovered = False
         self.setMouseTracking(True)
@@ -196,11 +197,19 @@ class _SingleArcCircle(QWidget):
         painter.setPen(QPen(track_color, arc_thickness, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
         painter.drawArc(rect, int(start_angle_deg * 16), int(-max_sweep * 16))
 
-        # Заполнение арки — пропорционально объёму
-        fill_ratio = min(self.volume / self.max_volume, 1.0) if self.max_volume > 0 else 0
+        # Арка = стабильность. 0% разброс → пустая, 100%+ → полная
+        # Порог: stability >= 1.0 (разброс >= 100% от медианы) → полная арка
+        fill_ratio = min(self.stability / 1.0, 1.0)
         sweep = max_sweep * fill_ratio
 
-        arc_color = QColor(Theme.PRIMARY)
+        # Цвет: зелёный (стабильно) → жёлтый → красный (волатильно)
+        if self.stability < 0.15:
+            arc_color = QColor("#4CAF50")
+        elif self.stability < 0.4:
+            arc_color = QColor("#FFA726")
+        else:
+            arc_color = QColor("#E85454")
+
         if self._hovered:
             arc_color = arc_color.lighter(120)
         thickness = arc_thickness + (1 if self._hovered else 0)
@@ -221,19 +230,19 @@ class _SingleArcCircle(QWidget):
         painter.setFont(QFont(Theme.FONT_FAMILY, 7))
         painter.drawText(QRectF(0, cy - 22, w, 12), Qt.AlignmentFlag.AlignCenter, self.period_label)
 
-        # Цена
+        # Объём (центр, крупно)
         painter.setPen(QColor(Theme.PRIMARY))
         painter.setFont(QFont(Theme.FONT_FAMILY, 10, QFont.Weight.Bold))
-        painter.drawText(QRectF(0, cy - 11, w, 18), Qt.AlignmentFlag.AlignCenter, f"${self.price_val:.2f}")
-
-        # Объём
-        painter.setPen(QColor(Theme.TEXT_SECONDARY))
-        painter.setFont(QFont(Theme.FONT_FAMILY, 7))
         if self.volume_mode in ("avg_day", "med_day"):
             vol_text = f"{self.volume}/d"
         else:
-            vol_text = f"{self.volume} sold"
-        painter.drawText(QRectF(0, cy + 7, w, 12), Qt.AlignmentFlag.AlignCenter, vol_text)
+            vol_text = str(self.volume)
+        painter.drawText(QRectF(0, cy - 11, w, 18), Qt.AlignmentFlag.AlignCenter, vol_text)
+
+        # Цена (под объёмом, мельче)
+        painter.setPen(QColor(Theme.TEXT_SECONDARY))
+        painter.setFont(QFont(Theme.FONT_FAMILY, 8))
+        painter.drawText(QRectF(0, cy + 7, w, 12), Qt.AlignmentFlag.AlignCenter, f"${self.price_val:.2f}")
 
         painter.end()
 
@@ -249,9 +258,11 @@ class _SingleArcCircle(QWidget):
     def mouseMoveEvent(self, event):
         if self._hovered:
             vol_str = f"{self.volume}/d" if self.volume_mode in ("avg_day", "med_day") else str(self.volume)
+            stab_pct = f"{self.stability * 100:.0f}%"
             text = (f"{self.period_label}\n"
                     f"Price: ${self.price_val:.2f}\n"
-                    f"Volume: {vol_str}")
+                    f"Volume: {vol_str}\n"
+                    f"Volatility: {stab_pct}")
             QToolTip.showText(self.mapToGlobal(event.pos()), text, self)
 
 
@@ -768,23 +779,22 @@ class ItemInfoDialog(QDialog):
             return
 
         cfg = self._stats_config
-        periods = [("7d", 7), ("30d", 30), ("90d", 90)]
 
-        # Считаем объёмы для всех периодов, чтобы найти max для масштабирования арки
-        period_data = []
-        for label, days in periods:
+        for label, days in [("7d", 7), ("30d", 30), ("90d", 90)]:
             data = _filter_by_days(graph, days)
             if not data:
                 continue
-            vol = _calc_volume(data, days, cfg["volume"])
-            period_data.append((label, days, data, vol))
 
-        max_vol = max((v for _, _, _, v in period_data), default=1) or 1
-
-        for label, days, data, vol in period_data:
             price = _calc_price(data, cfg["price"])
+            vol = _calc_volume(data, days, cfg["volume"])
+
+            # Стабильность: (max - min) / median. 0 = идеально стабильно
+            prices = [d["avg_price"] for d in data]
+            med = statistics.median(prices)
+            stability = (max(prices) - min(prices)) / med if med else 0
+
             circle = _SingleArcCircle(
-                label, price, vol, max_vol,
+                label, price, vol, stability,
                 volume_mode=cfg["volume"],
             )
             self._stats_layout.addWidget(circle, alignment=Qt.AlignmentFlag.AlignCenter)
