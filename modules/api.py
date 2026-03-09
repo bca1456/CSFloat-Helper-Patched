@@ -110,6 +110,7 @@ _INVENTORY_FIELDS = {
     "asset_id", "market_hash_name", "rarity", "float_value",
     "paint_seed", "wear_name", "collection", "stickers", "keychains",
     "def_index", "paint_index", "sticker_index", "inspect_link", "icon_url",
+    "keychain_index", "keychain_pattern",
 }
 
 
@@ -267,27 +268,56 @@ def _debug_save(name, data):
 
 
 def get_item_listings(api_key, def_index, paint_index=None, sticker_index=None,
-                      category=1, min_float=None, max_float=None, limit=50):
+                      category=1, min_float=None, max_float=None, limit=50,
+                      keychain_index=None, cursor=None, paint_seed=None,
+                      min_fade=None, max_fade=None, min_blue=None, max_blue=None,
+                      min_keychain_pattern=None, max_keychain_pattern=None,
+                      sort_by=None):
     """Получает текущие листинги предмета."""
     def _get():
-        params = {"def_index": def_index, "type": "buy_now"}
+        params = {"type": "buy_now"}
 
-        if paint_index:
+        if keychain_index:
+            params["keychain_index"] = keychain_index
+            params["sort_by"] = sort_by or "lowest_price"
+            params["limit"] = limit
+            if min_keychain_pattern is not None:
+                params["min_keychain_pattern"] = min_keychain_pattern
+            if max_keychain_pattern is not None:
+                params["max_keychain_pattern"] = max_keychain_pattern
+        elif paint_index:
+            params["def_index"] = def_index
             params["paint_index"] = paint_index
             params["category"] = category
             params["limit"] = limit
+            if sort_by:
+                params["sort_by"] = sort_by
             if min_float is not None:
                 params["min_float"] = min_float
             if max_float is not None:
                 params["max_float"] = max_float
+            if paint_seed is not None:
+                params["paint_seed"] = paint_seed
+            if min_fade is not None:
+                params["min_fade"] = min_fade
+            if max_fade is not None:
+                params["max_fade"] = max_fade
+            if min_blue is not None:
+                params["min_blue"] = min_blue
+            if max_blue is not None:
+                params["max_blue"] = max_blue
         elif sticker_index:
+            params["def_index"] = def_index
             params["sticker_index"] = sticker_index
-            params["sort_by"] = "lowest_price"
+            params["sort_by"] = sort_by or "lowest_price"
             params["limit"] = min(limit, 40)
         else:
-            # Кейсы, капсулы — без paint_index и sticker_index
-            params["sort_by"] = "lowest_price"
+            params["def_index"] = def_index
+            params["sort_by"] = sort_by or "lowest_price"
             params["limit"] = min(limit, 40)
+
+        if cursor:
+            params["cursor"] = cursor
 
         url = f"{LISTINGS_URL}?{urllib.parse.urlencode(params)}"
         headers = {"Authorization": api_key}

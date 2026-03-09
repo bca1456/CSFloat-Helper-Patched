@@ -11,7 +11,7 @@ from modules.models.columns import (
     COL_DAYS, COL_PRICE, COL_LISTING_ID, COL_ASSET_ID, COL_CREATED_AT,
     COL_PRICE_VALUE, COL_API_KEY, COL_COLLECTION, COL_RARITY, COL_WEAR,
     COL_DEF_INDEX, COL_PAINT_INDEX, COL_INSPECT_LINK, COL_ICON_URL,
-    COL_STICKER_INDEX,
+    COL_STICKER_INDEX, COL_KEYCHAIN_INDEX,
 )
 from .constants import RARITY_COLOR_MAP
 
@@ -285,3 +285,6 @@ class TablePopulator:
 
         sticker_index_item = QTableWidgetItem(str(item.get("sticker_index", "") or ""))
         self.table.setItem(row, COL_STICKER_INDEX, sticker_index_item)
+
+        keychain_index_item = QTableWidgetItem(str(item.get("keychain_index", "") or ""))
+        self.table.setItem(row, COL_KEYCHAIN_INDEX, keychain_index_item)

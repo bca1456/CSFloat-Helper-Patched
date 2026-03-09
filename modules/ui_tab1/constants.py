@@ -37,3 +37,16 @@ WEAR_CONDITIONS_MAP = {
     "WW": "Well-Worn",
     "BS": "Battle-Scarred",
 }
+
+WEAR_FLOAT_RANGES = {
+    "Factory New": (0, 0.07),
+    "Minimal Wear": (0.07, 0.15),
+    "Field-Tested": (0.15, 0.38),
+    "Well-Worn": (0.38, 0.45),
+    "Battle-Scarred": (0.45, 1),
+}
+
+RARITY_NAMES = {
+    0: "Consumer", 1: "Industrial", 2: "Mil-Spec",
+    3: "Restricted", 4: "Classified", 5: "Covert", 6: "Contraband",
+}

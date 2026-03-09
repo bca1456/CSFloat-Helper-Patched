@@ -400,6 +400,9 @@ class Theme:
             QTableView {{
                 background-color: {cls.BG_WHITE};
             }}
+            QTableWidget QHeaderView {{
+                background-color: {cls.BG_WHITE};
+            }}
             QTableWidget::item {{ padding-left: 5px; }}
             QTableWidget::item:selected {{ background-color: {cls.BG_SELECTION}; }}
             QTableWidget::item:selected:!active {{ background-color: {cls.BG_SELECTION}; }}

@@ -1,552 +1,38 @@
 # modules/ui_tab1/item_info_dialog.py
 
 import logging
-import math
-import re
-import statistics
-from datetime import datetime, timedelta, timezone
+import os
+from datetime import datetime, timezone
 
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTableWidget,
     QTableWidgetItem, QLabel, QWidget, QPushButton, QHeaderView,
-    QAbstractItemView, QFrame, QLineEdit, QToolTip, QMenu,
+    QAbstractItemView, QFrame, QLineEdit, QMenu,
 )
-from PyQt6.QtGui import QFont, QColor, QPainter, QPen, QPainterPath, QBrush, QPixmap
-from PyQt6.QtCore import Qt, QRect, QPointF, QTimer, QRectF, QThreadPool, QSettings
+from PyQt6.QtGui import QFont, QColor, QPixmap
+from PyQt6.QtCore import Qt, QTimer, QThreadPool, QSettings, pyqtSignal
 from PyQt6.QtGui import QActionGroup
 
 from modules.theme import Theme
 from modules.loading_spinner import LoadingOverlay
 from modules.workers import ApiWorker
-from modules.utils import cache_image_async
+from modules.utils import cache_image_async, days_ago, cents_to_dollars
 from modules.api import (
     get_item_listings, get_item_sales, get_item_buy_orders, get_item_graph,
 )
+from modules.ui_tab1.constants import WEAR_FLOAT_RANGES
+from modules.ui_tab1.item_info_widgets import (
+    STATS_SETTINGS_KEYS, NumericItem, SingleArcCircle, PriceChart,
+    filter_by_days, calc_price, calc_volume, calc_score, calc_volatility,
+    parse_order_expression,
+)
 
-WEAR_FLOAT_RANGES = {
-    "Factory New": (0, 0.07),
-    "Minimal Wear": (0.07, 0.15),
-    "Field-Tested": (0.15, 0.38),
-    "Well-Worn": (0.38, 0.45),
-    "Battle-Scarred": (0.45, 1),
-}
-
-RARITY_NAMES = {
-    0: "Consumer", 1: "Industrial", 2: "Mil-Spec",
-    3: "Restricted", 4: "Classified", 5: "Covert", 6: "Contraband",
-}
-
-
-def _filter_by_days(graph, days):
-    """Фильтрует записи графика по календарным дням от сегодня."""
-    cutoff = datetime.now(timezone.utc).date() - timedelta(days=days)
-    result = []
-    for d in graph:
-        try:
-            dt = datetime.fromisoformat(d["day"].replace("Z", "+00:00")).date()
-            if dt >= cutoff:
-                result.append(d)
-        except Exception:
-            continue
-    return result
-
-
-
-STATS_SETTINGS_KEYS = {
-    "score": "stats_score_metric",
-    "price": "stats_price_metric",
-    "volume": "stats_volume_metric",
-    "volatility": "stats_volatility_metric",
-}
-
-
-def _calc_price(data, metric):
-    raw_prices = [d["avg_price"] for d in data]
-    prices = _clean_prices(raw_prices)
-    if metric == "average":
-        return statistics.mean(prices) / 100
-    if metric == "min":
-        return min(prices) / 100
-    if metric == "max":
-        return max(prices) / 100
-    if metric == "weighted":
-        # Weighted использует raw данные, но с IQR-порогом
-        sorted_p = sorted(raw_prices)
-        n = len(sorted_p)
-        if n >= 4:
-            q1, q3 = sorted_p[n // 4], sorted_p[3 * n // 4]
-            upper = q3 + 1.5 * (q3 - q1)
-            filtered = [(d["avg_price"], d["count"]) for d in data if d["avg_price"] <= upper]
-        else:
-            filtered = [(d["avg_price"], d["count"]) for d in data]
-        total_vol = sum(c for _, c in filtered)
-        if total_vol == 0:
-            return statistics.median(prices) / 100
-        return sum(p * c for p, c in filtered) / total_vol / 100
-    return statistics.median(prices) / 100
-
-
-
-def _calc_volume(data, days, metric):
-    total = sum(d["count"] for d in data)
-    if metric == "avg_day":
-        return round(total / days, 1) if days else 0
-    if metric == "med_day":
-        daily = [d["count"] for d in data]
-        return round(statistics.median(daily), 1) if daily else 0
-    return total
-
-
-def _clean_prices(prices):
-    """IQR-фильтрация выбросов. Возвращает цены без аномалий."""
-    if len(prices) < 4:
-        return prices
-    sorted_p = sorted(prices)
-    n = len(sorted_p)
-    q1 = sorted_p[n // 4]
-    q3 = sorted_p[3 * n // 4]
-    iqr = q3 - q1
-    lower = q1 - 1.5 * iqr
-    upper = q3 + 1.5 * iqr
-    cleaned = [p for p in prices if lower <= p <= upper]
-    return cleaned if cleaned else prices
-
-
-def _calc_score(data, days, metric):
-    raw_prices = [d["avg_price"] for d in data]
-    prices = _clean_prices(raw_prices)
-    total_vol = sum(d["count"] for d in data)
-    daily_vol = total_vol / days if days else 0
-    med_p = statistics.median(prices)
-    price_usd = med_p / 100
-
-    # CV на очищенных данных
-    cv = 0
-    if med_p and len(prices) > 1:
-        cv = statistics.stdev(prices) / statistics.mean(prices)
-    stability = 1 / (1 + cv)
-
-    if metric == "trade":
-        base = math.log(1 + daily_vol) * math.log(1 + price_usd)
-        return round(base * stability * 10, 1)
-    # market (default)
-    return round(math.log(1 + daily_vol) * stability, 2)
-
-
-def _calc_volatility(data, metric):
-    raw_prices = [d["avg_price"] for d in data]
-    prices = _clean_prices(raw_prices)
-    if len(prices) < 2:
-        return 0
-    med = statistics.median(prices)
-    if not med:
-        return 0
-    if metric == "range_pct":
-        return (max(prices) - min(prices)) / med
-    # cv (default)
-    return statistics.stdev(prices) / statistics.mean(prices) if statistics.mean(prices) else 0
-
-
-def days_ago(iso_str):
-    try:
-        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
-        delta = datetime.now(timezone.utc) - dt
-        d, h = delta.days, delta.seconds // 3600
-        return f"{h}h" if d == 0 else f"{d}d"
-    except Exception:
-        return ""
-
-
-def cents_to_dollars(cents):
-    return f"${cents / 100:.2f}"
-
-
-def format_date(iso_str):
-    try:
-        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
-        return dt.strftime("%b %d, %Y")
-    except Exception:
-        return ""
-
-
-def parse_order_expression(expression, def_index, paint_index):
-    if not expression:
-        return "Item"
-
-    expr = expression
-    parts = []
-
-    # FloatValue range
-    float_min = None
-    float_max = None
-    for m in re.finditer(r'FloatValue\s*(>=?)\s*([\d.]+)', expr):
-        float_min = m.group(2)
-    for m in re.finditer(r'FloatValue\s*(<=?)\s*([\d.]+)', expr):
-        float_max = m.group(2)
-
-    def trim(v):
-        return v.rstrip('0').rstrip('.')
-
-    if float_min and float_max:
-        parts.append(f"Float {trim(float_min)}–{trim(float_max)}")
-    elif float_max:
-        parts.append(f"Float <{trim(float_max)}")
-    elif float_min:
-        parts.append(f"Float >{trim(float_min)}")
-
-    seeds = re.findall(r'PaintSeed\s*==\s*(\d+)', expr)
-    if seeds:
-        if len(seeds) <= 3:
-            parts.append(f"Seed {', '.join(seeds)}")
-        else:
-            parts.append(f"Seed {', '.join(seeds[:3])}...")
-
-    m = re.search(r'StatTrak\s*==\s*(true|false)', expr)
-    if m:
-        parts.append("StatTrak" if m.group(1) == "true" else "No ST")
-
-    m = re.search(r'Souvenir\s*==\s*(true|false)', expr)
-    if m:
-        parts.append("Souvenir" if m.group(1) == "true" else "No Souv")
-
-    m = re.search(r'Rarity\s*==\s*(\d+)', expr)
-    if m:
-        r_id = int(m.group(1))
-        parts.append(RARITY_NAMES.get(r_id, f"Rarity {r_id}"))
-
-    if "HasSticker" in expr:
-        parts.append("Stickers")
-
-    return " + ".join(parts) if parts else "Item"
-
-
-# ═══════════════════════════════════════════════════════════════════
-# Arc circle widget
-# ═══════════════════════════════════════════════════════════════════
-
-def _interpolate_color(c1, c2, t):
-    """Линейная интерполяция между двумя QColor, t: 0..1."""
-    return QColor(
-        int(c1.red() + (c2.red() - c1.red()) * t),
-        int(c1.green() + (c2.green() - c1.green()) * t),
-        int(c1.blue() + (c2.blue() - c1.blue()) * t),
-        int(c1.alpha() + (c2.alpha() - c1.alpha()) * t),
-    )
-
-
-class _SingleArcCircle(QWidget):
-    """Круг: арка = ликвидность (gradient), центр = score, price, volatility."""
-
-    def __init__(self, label, score, price_val, volatility, volume, max_volume,
-                 score_mode="market", vol_mode="total", volatility_mode="cv",
-                 parent=None):
-        super().__init__(parent)
-        self.period_label = label
-        self.score = score
-        self.price_val = price_val
-        self.volatility = volatility
-        self.volume = volume
-        self.max_volume = max_volume
-        self.score_mode = score_mode
-        self.vol_mode = vol_mode
-        self.volatility_mode = volatility_mode
-        self._hovered = False
-        self.setMouseTracking(True)
-        self.setFixedSize(80, 80)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-
-    def _fmt_volatility(self):
-        if self.volatility_mode == "range_pct":
-            return f"\u00b1{self.volatility * 100:.0f}%"
-        return f"CV {self.volatility * 100:.0f}%"
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w, h = self.width(), self.height()
-        cx, cy = w / 2, h / 2
-
-        arc_thickness = 5
-        radius = min(w, h) / 2 - 6
-        max_sweep = 270
-        start_angle_deg = 225
-
-        rect = QRectF(cx - radius, cy - radius, radius * 2, radius * 2)
-
-        # Трек (фон)
-        track_color = QColor(Theme.BG_LIGHT) if not self._hovered else QColor(Theme.BG_HOVER)
-        painter.setPen(QPen(track_color, arc_thickness, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-        painter.drawArc(rect, int(start_angle_deg * 16), int(-max_sweep * 16))
-
-        # Арка = volume / max_volume
-        fill_ratio = min(self.volume / self.max_volume, 1.0) if self.max_volume > 0 else 0
-        sweep = max_sweep * fill_ratio
-
-        # Градиентная арка
-        if sweep > 0:
-            primary = QColor(Theme.PRIMARY)
-            start_color = QColor(primary)
-            start_color.setAlpha(60)
-            end_color = QColor(primary)
-            if self._hovered:
-                start_color = start_color.lighter(120)
-                end_color = end_color.lighter(120)
-
-            thickness = arc_thickness + (1 if self._hovered else 0)
-            n_seg = max(int(sweep / 4), 2)
-            seg_sweep = sweep / n_seg
-
-            for i in range(n_seg):
-                t = i / max(n_seg - 1, 1)
-                color = _interpolate_color(start_color, end_color, t)
-                angle = start_angle_deg - seg_sweep * i
-                painter.setPen(QPen(color, thickness, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
-                painter.drawArc(rect, int(angle * 16), int(-(seg_sweep + 0.5) * 16))
-
-            # Скруглённые концы
-            painter.setPen(QPen(start_color, thickness, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-            painter.drawArc(rect, int(start_angle_deg * 16), int(-1 * 16))
-            painter.setPen(QPen(end_color, thickness, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-            end_angle = start_angle_deg - sweep
-            painter.drawArc(rect, int((end_angle + 1) * 16), int(-1 * 16))
-
-            # Точка на конце
-            end_rad = math.radians(start_angle_deg - sweep)
-            dot_x = cx + radius * math.cos(end_rad)
-            dot_y = cy - radius * math.sin(end_rad)
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QBrush(end_color))
-            painter.drawEllipse(QPointF(dot_x, dot_y), 2.5, 2.5)
-
-        # Score (центр, крупно)
-        painter.setPen(QColor(Theme.PRIMARY))
-        painter.setFont(QFont(Theme.FONT_FAMILY, 10, QFont.Weight.Bold))
-        score_text = f"{self.score:.1f}" if self.score >= 10 else f"{self.score:.2f}"
-        painter.drawText(QRectF(0, cy - 20, w, 16), Qt.AlignmentFlag.AlignCenter, score_text)
-
-        # Price (под score)
-        painter.setPen(QColor(Theme.TEXT_SECONDARY))
-        painter.setFont(QFont(Theme.FONT_FAMILY, 8))
-        painter.drawText(QRectF(0, cy - 5, w, 12), Qt.AlignmentFlag.AlignCenter, f"${self.price_val:.2f}")
-
-        # Volatility (под price)
-        painter.setPen(QColor(Theme.TEXT_SECONDARY))
-        painter.setFont(QFont(Theme.FONT_FAMILY, 7))
-        painter.drawText(QRectF(0, cy + 7, w, 10), Qt.AlignmentFlag.AlignCenter, self._fmt_volatility())
-
-        # Period label — в центре разрыва арки (270° = самый низ)
-        painter.setPen(QColor(Theme.TEXT_SECONDARY))
-        painter.setFont(QFont(Theme.FONT_FAMILY, 7, QFont.Weight.Bold))
-        painter.drawText(QRectF(0, cy + radius - 8, w, 12), Qt.AlignmentFlag.AlignCenter, self.period_label)
-
-        painter.end()
-
-    def enterEvent(self, event):
-        self._hovered = True
-        self.update()
-
-    def leaveEvent(self, event):
-        self._hovered = False
-        self.update()
-        QToolTip.hideText()
-
-    def mouseMoveEvent(self, event):
-        if self._hovered:
-            vol_str = f"{self.volume}/d" if self.vol_mode in ("avg_day", "med_day") else str(self.volume)
-            score_label = "Trade Rating" if self.score_mode == "trade" else "Market Score"
-            text = (f"{self.period_label}\n"
-                    f"{score_label}: {self.score:.2f}\n"
-                    f"Price: ${self.price_val:.2f}\n"
-                    f"Volume: {vol_str}\n"
-                    f"Volatility: {self._fmt_volatility()}")
-            QToolTip.showText(self.mapToGlobal(event.pos()), text, self)
-
-
-# ═══════════════════════════════════════════════════════════════════
-# Price chart with volume bars and tooltip
-# ═══════════════════════════════════════════════════════════════════
-
-class PriceChart(QWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._all_data = []
-        self.data = []
-        self._points = []
-        self._hover_idx = -1
-        self.setMouseTracking(True)
-        self.setMinimumHeight(120)
-
-    def set_data(self, graph_data):
-        self._all_data = graph_data or []
-        self.set_period(90)
-
-    def set_period(self, days):
-        filtered = _filter_by_days(self._all_data, days) if days < 999 else self._all_data
-        self.data = list(reversed(filtered))
-        self._points = []
-        self._hover_idx = -1
-        self.update()
-
-    def paintEvent(self, event):
-        if not self.data:
-            return
-
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-        w, h = self.width(), self.height()
-        pad_l, pad_r, pad_t, pad_b = 44, 10, 8, 20
-
-        prices = [d["avg_price"] / 100 for d in self.data]
-        volumes = [d.get("count", 0) for d in self.data]
-        min_p, max_p = min(prices), max(prices)
-        max_vol = max(volumes) if volumes else 1
-        rng = max_p - min_p or 0.01
-
-        cw = w - pad_l - pad_r
-        ch = h - pad_t - pad_b
-
-        painter.fillRect(self.rect(), QColor(Theme.BG_WHITE))
-
-        painter.setPen(QPen(QColor(Theme.BORDER_GRID), 1))
-        for i in range(5):
-            y = pad_t + ch * i / 4
-            painter.drawLine(int(pad_l), int(y), int(w - pad_r), int(y))
-
-        label_font = QFont(Theme.FONT_FAMILY, 7)
-        painter.setFont(label_font)
-        painter.setPen(QColor(Theme.TEXT_SECONDARY))
-
-        for i in range(5):
-            y = pad_t + ch * i / 4
-            price = max_p - rng * i / 4
-            painter.drawText(QRect(0, int(y) - 7, pad_l - 4, 14),
-                             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                             f"${price:.2f}")
-
-        n = len(self.data)
-        if n < 2:
-            painter.end()
-            return
-
-        step = max(1, n // 4)
-        for i in range(0, n, step):
-            x = pad_l + cw * i / (n - 1)
-            short = self.data[i]["day"][5:10]
-            painter.drawText(QRect(int(x) - 20, h - pad_b + 2, 40, 16),
-                             Qt.AlignmentFlag.AlignCenter, short)
-
-        chart_bottom = h - pad_b
-
-        vol_max_h = ch * 0.30
-        bar_w = max(2, cw / n * 0.6)
-        vol_color = QColor(Theme.PRIMARY)
-        vol_color.setAlpha(35)
-        vol_color_hover = QColor(Theme.PRIMARY)
-        vol_color_hover.setAlpha(80)
-
-        for i, d in enumerate(self.data):
-            x = pad_l + cw * i / (n - 1)
-            vol = d.get("count", 0)
-            bar_h = (vol / max_vol) * vol_max_h if max_vol > 0 else 0
-            if bar_h < 1:
-                bar_h = 1
-            color = vol_color_hover if i == self._hover_idx else vol_color
-            painter.fillRect(QRectF(x - bar_w / 2, chart_bottom - bar_h, bar_w, bar_h), color)
-
-        self._points = []
-        for i, d in enumerate(self.data):
-            x = pad_l + cw * i / (n - 1)
-            y = pad_t + ch * (1 - (d["avg_price"] / 100 - min_p) / rng)
-            self._points.append(QPointF(x, y))
-
-        fill_path = QPainterPath()
-        fill_path.moveTo(QPointF(self._points[0].x(), chart_bottom))
-        for p in self._points:
-            fill_path.lineTo(p)
-        fill_path.lineTo(QPointF(self._points[-1].x(), chart_bottom))
-        fill_path.closeSubpath()
-        fc = QColor(Theme.PRIMARY)
-        fc.setAlpha(25)
-        painter.fillPath(fill_path, fc)
-
-        painter.setPen(QPen(QColor(Theme.PRIMARY), 2))
-        for i in range(len(self._points) - 1):
-            painter.drawLine(self._points[i], self._points[i + 1])
-
-        if 0 <= self._hover_idx < len(self._points):
-            px = self._points[self._hover_idx]
-            line_pen = QPen(QColor(Theme.TEXT_SECONDARY), 1, Qt.PenStyle.DashLine)
-            painter.setPen(line_pen)
-            painter.drawLine(QPointF(px.x(), pad_t), QPointF(px.x(), chart_bottom))
-
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QBrush(QColor(Theme.PRIMARY)))
-            painter.drawEllipse(px, 4, 4)
-
-        painter.end()
-
-    def mouseMoveEvent(self, event):
-        if not self._points:
-            return
-
-        mx = event.pos().x()
-        best_idx = -1
-        best_dist = 999
-
-        for i, p in enumerate(self._points):
-            dist = abs(p.x() - mx)
-            if dist < best_dist:
-                best_dist = dist
-                best_idx = i
-
-        if best_dist > 20:
-            best_idx = -1
-
-        if best_idx != self._hover_idx:
-            self._hover_idx = best_idx
-            self.update()
-
-            if 0 <= best_idx < len(self.data):
-                d = self.data[best_idx]
-                price = cents_to_dollars(d["avg_price"])
-                count = d.get("count", 0)
-                date = format_date(d["day"])
-                text = f"{price}\n{count} Sold\n{date}"
-                QToolTip.showText(self.mapToGlobal(event.pos()), text, self)
-            else:
-                QToolTip.hideText()
-
-    def leaveEvent(self, event):
-        if self._hover_idx != -1:
-            self._hover_idx = -1
-            self.update()
-        QToolTip.hideText()
-
-
-# ═══════════════════════════════════════════════════════════════════
-# Sortable numeric item
-# ═══════════════════════════════════════════════════════════════════
-
-class NumericItem(QTableWidgetItem):
-    def __init__(self, text, sort_value):
-        super().__init__(text)
-        self._sort_value = sort_value
-
-    def __lt__(self, other):
-        if isinstance(other, NumericItem):
-            return self._sort_value < other._sort_value
-        return super().__lt__(other)
-
-
-# ═══════════════════════════════════════════════════════════════════
-# Main Dialog
-# ═══════════════════════════════════════════════════════════════════
 
 class ItemInfoDialog(QDialog):
+    price_selected = pyqtSignal(int)
     def __init__(self, market_hash_name, def_index, paint_index,
                  sticker_index="", inspect_link="", wear_name="",
-                 api_key="", icon_url="", parent=None):
+                 api_key="", icon_url="", keychain_index="", parent=None):
         super().__init__(parent)
 
         self.item_name = market_hash_name
@@ -557,6 +43,9 @@ class ItemInfoDialog(QDialog):
         self.inspect_link = inspect_link
         self.wear_name = wear_name
         self.api_key = api_key
+        self.keychain_index = keychain_index
+        self.is_charm = bool(keychain_index)
+        self.has_params = bool(paint_index or keychain_index)
 
         self.is_stattrak = "StatTrak\u2122" in market_hash_name
         self.is_souvenir = "Souvenir" in market_hash_name
@@ -572,15 +61,13 @@ class ItemInfoDialog(QDialog):
         # Float range по wear condition
         self.wear_min, self.wear_max = WEAR_FLOAT_RANGES.get(wear_name, (None, None))
 
-        # Кэш данных и сохранённые значения фильтров
-        self._cached_listings = None
-        self._saved_float_min = ''
-        self._saved_float_max = ''
         self._listings_data = []
         self._sales_data = []
         self._orders_data = []
         self._graph_data = []
         self._pending_requests = 0
+        self._current_cursor = None
+        self._is_loading_more = False
 
         # Настройки статистики
         _s = QSettings("MyCompany", "SteamInventoryApp")
@@ -624,7 +111,6 @@ class ItemInfoDialog(QDialog):
         self._stats_btn.move(self.width() - 30, 6)
 
     def _on_icon_loaded(self, path):
-        import os
         if not path or not os.path.exists(path):
             return
         pm = QPixmap(path).scaled(
@@ -649,6 +135,7 @@ class ItemInfoDialog(QDialog):
             get_item_listings, self.api_key, self.def_index,
             self.paint_index, self.sticker_index,
             self.category, self.wear_min, self.wear_max,
+            keychain_index=self.keychain_index,
         )
         w1.signals.result.connect(self._on_listings_loaded)
         w1.signals.error.connect(self._on_request_error)
@@ -695,10 +182,14 @@ class ItemInfoDialog(QDialog):
 
     def _on_listings_loaded(self, data):
         if data:
-            listings = data.get("data", data) if isinstance(data, dict) else data
+            if isinstance(data, dict):
+                self._current_cursor = data.get("cursor")
+                listings = data.get("data", [])
+            else:
+                listings = data if isinstance(data, list) else []
+                self._current_cursor = None
             if isinstance(listings, list):
                 self._listings_data = listings
-                self._cached_listings = listings
                 self._populate_listings_table(listings)
         self._on_request_done()
 
@@ -749,6 +240,9 @@ class ItemInfoDialog(QDialog):
         mid.addWidget(sales_panel)
         root.addLayout(mid, stretch=1)
 
+        self.listings_table.cellDoubleClicked.connect(self._on_listing_double_click)
+        self._sales_table.cellDoubleClicked.connect(self._on_sale_double_click)
+
         bottom = QHBoxLayout()
         bottom.setSpacing(6)
         orders_panel = self._build_orders_panel()
@@ -778,51 +272,66 @@ class ItemInfoDialog(QDialog):
         if self.icon_url:
             cache_image_async(self.icon_url, self._on_icon_loaded)
 
-        input_h = 24
-        label_w = 58
+        if self.has_params:
+            input_h = 24
+            label_w = 58
 
-        filters_col = QVBoxLayout()
-        filters_col.setSpacing(2)
-        filters_col.setContentsMargins(0, 0, 0, 0)
+            filters_col = QVBoxLayout()
+            filters_col.setSpacing(2)
+            filters_col.setContentsMargins(0, 0, 0, 0)
 
-        # Ряд 1: Float Min Max
-        row1 = QHBoxLayout()
-        row1.setSpacing(4)
-        row1.setContentsMargins(0, 0, 0, 0)
+            # Ряд 1: Float Min Max
+            row1 = QHBoxLayout()
+            row1.setSpacing(4)
+            row1.setContentsMargins(0, 0, 0, 0)
 
-        self._float_label = QPushButton("Float")
-        self._float_label.setFixedSize(label_w, input_h)
-        self._float_label.setFont(QFont(Theme.FONT_FAMILY, Theme.FONT_SIZE_SMALL))
-        self._float_label.setCursor(Qt.CursorShape.ArrowCursor)
-        self._update_clear_label(False)
-        self._float_label.clicked.connect(self._clear_all_filters)
-        row1.addWidget(self._float_label)
+            self._float_label = QPushButton("Float")
+            self._float_label.setFixedSize(label_w, input_h)
+            self._float_label.setFont(QFont(Theme.FONT_FAMILY, Theme.FONT_SIZE))
+            self._float_label.setCursor(Qt.CursorShape.ArrowCursor)
+            self._set_label_clear_style(self._float_label, "Float", False)
+            self._float_label.clicked.connect(self._clear_float_filter)
+            row1.addWidget(self._float_label)
 
-        self._float_min = QLineEdit()
-        self._float_min.setPlaceholderText("Min")
-        self._float_min.setFixedSize(65, input_h)
-        self._float_min.setStyleSheet(Theme.input_style())
-        self._float_min.returnPressed.connect(self._apply_filters)
-        self._float_min.textChanged.connect(self._check_filters_active)
-        row1.addWidget(self._float_min)
+            self._float_min = QLineEdit()
+            self._float_min.setPlaceholderText("Min")
+            self._float_min.setFixedSize(65, input_h)
+            self._float_min.setStyleSheet(Theme.input_style())
+            self._float_min.returnPressed.connect(self._apply_filters)
+            self._float_min.textChanged.connect(self._check_filters_active)
+            row1.addWidget(self._float_min)
 
-        self._float_max = QLineEdit()
-        self._float_max.setPlaceholderText("Max")
-        self._float_max.setFixedSize(65, input_h)
-        self._float_max.setStyleSheet(Theme.input_style())
-        self._float_max.returnPressed.connect(self._apply_filters)
-        self._float_max.textChanged.connect(self._check_filters_active)
-        row1.addWidget(self._float_max)
-        filters_col.addLayout(row1)
+            self._float_max = QLineEdit()
+            self._float_max.setPlaceholderText("Max")
+            self._float_max.setFixedSize(65, input_h)
+            self._float_max.setStyleSheet(Theme.input_style())
+            self._float_max.returnPressed.connect(self._apply_filters)
+            self._float_max.textChanged.connect(self._check_filters_active)
+            row1.addWidget(self._float_max)
+            filters_col.addLayout(row1)
 
-        # Ряд 2: переключаемый фильтр
-        row2 = QHBoxLayout()
-        row2.setSpacing(4)
-        row2.setContentsMargins(0, 0, 0, 0)
-        self._build_switchable_filter(row2, input_h, label_w)
-        filters_col.addLayout(row2)
+            # Ряд 2: переключаемый фильтр
+            row2 = QHBoxLayout()
+            row2.setSpacing(4)
+            row2.setContentsMargins(0, 0, 0, 0)
+            self._build_switchable_filter(row2, input_h, label_w)
+            filters_col.addLayout(row2)
 
-        outer.addLayout(filters_col)
+            # Для брелков: скрыть Float, зафиксировать Keychain
+            if self.is_charm:
+                self._float_label.hide()
+                self._float_min.hide()
+                self._float_max.hide()
+                self._switch_filter(3)
+                self._filter_label.setText("Keychain")
+                self._filter_label.setCursor(Qt.CursorShape.ArrowCursor)
+                try:
+                    self._filter_label.clicked.disconnect()
+                except TypeError:
+                    pass
+                self._filter_label.clicked.connect(self._on_charm_label_click)
+
+            outer.addLayout(filters_col)
 
         # Stats placeholder — заполнится после загрузки graph
         self._stats_container = QWidget()
@@ -899,20 +408,20 @@ class ItemInfoDialog(QDialog):
         periods = [("7d", 7), ("30d", 30), ("90d", 90)]
         period_data = []
         for label, days in periods:
-            data = _filter_by_days(graph, days)
+            data = filter_by_days(graph, days)
             if not data:
                 continue
-            vol = _calc_volume(data, days, cfg["volume"])
+            vol = calc_volume(data, days, cfg["volume"])
             period_data.append((label, days, data, vol))
 
         max_vol = max((v for _, _, _, v in period_data), default=1) or 1
 
         for label, days, data, vol in period_data:
-            price = _calc_price(data, cfg["price"])
-            score = _calc_score(data, days, cfg["score"])
-            volatility = _calc_volatility(data, cfg["volatility"])
+            price = calc_price(data, cfg["price"])
+            score = calc_score(data, days, cfg["score"])
+            volatility = calc_volatility(data, cfg["volatility"])
 
-            circle = _SingleArcCircle(
+            circle = SingleArcCircle(
                 label, score, price, volatility, vol, max_vol,
                 score_mode=cfg["score"],
                 vol_mode=cfg["volume"],
@@ -922,7 +431,7 @@ class ItemInfoDialog(QDialog):
 
     def _build_switchable_filter(self, lay, input_h, label_w=58):
         self._filter_types = [
-            {"name": "Pattern", "placeholder": "e.g. 323, 715", "mode": "single"},
+            {"name": "Seed", "placeholder": "e.g. 323, 715", "mode": "single"},
             {"name": "Fade %", "placeholder_min": "Min %", "placeholder_max": "Max %", "mode": "range"},
             {"name": "Blue %", "placeholder_min": "Min %", "placeholder_max": "Max %", "mode": "range"},
             {"name": "Keychain", "placeholder_min": "Min", "placeholder_max": "Max", "mode": "range"},
@@ -930,8 +439,8 @@ class ItemInfoDialog(QDialog):
         self._current_filter_idx = 0
         self._filter_values = {}
 
-        self._filter_label = QPushButton("Pattern \u25be")
-        self._filter_label.setFont(QFont(Theme.FONT_FAMILY, Theme.FONT_SIZE_SMALL))
+        self._filter_label = QPushButton("Seed \u25be")
+        self._filter_label.setFont(QFont(Theme.FONT_FAMILY, Theme.FONT_SIZE))
         self._filter_label.setFixedSize(label_w, input_h)
         self._filter_label.setStyleSheet(f"""
             QPushButton {{
@@ -953,15 +462,12 @@ class ItemInfoDialog(QDialog):
             action = self._filter_selector.addAction(ft["name"])
             action.triggered.connect(lambda checked, idx=i: self._switch_filter(idx))
 
-        self._filter_label.clicked.connect(
-            lambda: self._filter_selector.exec(
-                self._filter_label.mapToGlobal(self._filter_label.rect().bottomLeft())
-            )
-        )
+        self._filter_label.clicked.connect(self._on_filter_label_click)
         lay.addWidget(self._filter_label)
 
         self._filter_input_single = QLineEdit()
         self._filter_input_single.setPlaceholderText("e.g. 323, 715")
+
         self._filter_input_single.setFixedSize(134, input_h)
         self._filter_input_single.setStyleSheet(Theme.input_style())
         self._filter_input_single.returnPressed.connect(self._apply_filters)
@@ -998,6 +504,20 @@ class ItemInfoDialog(QDialog):
         ft = self._filter_types[idx]
         self._filter_label.setText(f"{ft['name']} \u25be")
 
+        if not self.is_charm:
+            # Заголовок колонки Seed → Fade%/Blue% при соответствующем фильтре
+            seed_header = ft["name"] if ft["name"] in ("Fade %", "Blue %") else "Seed"
+            self.listings_table.setHorizontalHeaderItem(
+                1, QTableWidgetItem(seed_header))
+            self._sales_table.setHorizontalHeaderItem(
+                2, QTableWidgetItem(seed_header))
+
+            # Перезаполняем таблицы (seed ↔ percentage)
+            if self._listings_data:
+                self._populate_listings_table(self._listings_data)
+            if self._sales_data:
+                self._populate_sales_table(self._sales_data)
+
         if ft["mode"] == "single":
             self._filter_input_single.show()
             self._filter_input_min.hide()
@@ -1021,14 +541,54 @@ class ItemInfoDialog(QDialog):
 
     def _parse_float(self, text):
         try:
+            if not text:
+                return None
             return float(text.strip()) if text.strip() else None
         except ValueError:
             return None
 
-    def _apply_filters(self):
+    def _collect_filter_params(self):
+        """Собирает все активные фильтры в dict для API запроса."""
+        params = {}
+
         fmin = self._parse_float(self._float_min.text())
         fmax = self._parse_float(self._float_max.text())
+        if fmin is not None:
+            params["min_float"] = fmin
+        if fmax is not None:
+            params["max_float"] = fmax
 
+        active = self._get_active_filter_name()
+        if active == "Seed":
+            seeds = self._filter_values.get("Seed", "").strip()
+            if seeds:
+                params["paint_seed"] = seeds
+        elif active == "Fade %":
+            v = self._parse_float(self._filter_values.get("Fade %_min"))
+            if v is not None:
+                params["min_fade"] = v
+            v = self._parse_float(self._filter_values.get("Fade %_max"))
+            if v is not None:
+                params["max_fade"] = v
+        elif active == "Blue %":
+            v = self._parse_float(self._filter_values.get("Blue %_min"))
+            if v is not None:
+                params["min_blue"] = v
+            v = self._parse_float(self._filter_values.get("Blue %_max"))
+            if v is not None:
+                params["max_blue"] = v
+        elif active == "Keychain":
+            v = self._parse_float(self._filter_values.get("Keychain_min"))
+            if v is not None:
+                params["min_keychain_pattern"] = int(v)
+            v = self._parse_float(self._filter_values.get("Keychain_max"))
+            if v is not None:
+                params["max_keychain_pattern"] = int(v)
+
+        return params
+
+    def _apply_filters(self):
+        """Все фильтры отправляют API запрос."""
         cur = self._filter_types[self._current_filter_idx]
         if cur["mode"] == "single":
             self._filter_values[cur["name"]] = self._filter_input_single.text()
@@ -1036,81 +596,55 @@ class ItemInfoDialog(QDialog):
             self._filter_values[f"{cur['name']}_min"] = self._filter_input_min.text()
             self._filter_values[f"{cur['name']}_max"] = self._filter_input_max.text()
 
-        # Если указан float диапазон — новый API запрос
-        has_float_filter = fmin is not None or fmax is not None
-        if has_float_filter and self.paint_index:
-            # Сохраняем значения ДО async запроса
-            self._saved_float_min = self._float_min.text()
-            self._saved_float_max = self._float_max.text()
-            self._fetch_filtered_listings(fmin, fmax)
-            return
+        self._fetch_listings_with_filters(self._collect_filter_params())
 
-        # Если нет float фильтра — восстанавливаем из кэша
-        if not has_float_filter and self._cached_listings is not None:
-            self._listings_data = self._cached_listings
-            self._populate_listings_table(self._cached_listings)
-
-        # Pattern — локальная фильтрация
-        patterns = set()
-        pat_text = self._filter_values.get("Pattern", "").strip()
-        if pat_text:
-            for p in pat_text.replace(" ", "").split(","):
-                if p.isdigit():
-                    patterns.add(int(p))
-
-        for row in range(self.listings_table.rowCount()):
-            seed_item = self.listings_table.item(row, 1)
-            seed = seed_item._sort_value if isinstance(seed_item, NumericItem) else 0
-            hide = bool(patterns and seed not in patterns)
-            self.listings_table.setRowHidden(row, hide)
-
-    def _fetch_filtered_listings(self, fmin, fmax):
-        """Новый API запрос с пользовательским float диапазоном."""
+    def _fetch_listings_with_filters(self, extra_params):
+        """API запрос с текущими фильтрами."""
+        self._current_cursor = None
         pool = QThreadPool.globalInstance()
         w = ApiWorker(
             get_item_listings, self.api_key, self.def_index,
             self.paint_index, self.sticker_index, self.category,
-            fmin or self.wear_min, fmax or self.wear_max,
+            keychain_index=self.keychain_index,
+            **extra_params,
         )
-        w.signals.result.connect(self._on_filtered_listings_loaded)
+        w.signals.result.connect(self._on_listings_loaded)
         w.signals.error.connect(self._on_request_error)
         pool.start(w)
 
-    def _on_filtered_listings_loaded(self, data):
-        if data:
-            listings = data.get("data", data) if isinstance(data, dict) else data
-            if isinstance(listings, list):
-                self._listings_data = listings
-                self._populate_listings_table(listings)
-
-        # Восстанавливаем значения из сохранённых в _apply_filters
-        fmin_text = getattr(self, '_saved_float_min', '')
-        fmax_text = getattr(self, '_saved_float_max', '')
-        if fmin_text or fmax_text:
-            self._float_min.setText(fmin_text)
-            self._float_max.setText(fmax_text)
-            self._update_clear_label(True)
-
-    def _update_clear_label(self, active):
+    def _set_label_clear_style(self, label, text, active):
         if active:
-            self._float_label.setText("\u2715 Float")
-            self._float_label.setCursor(Qt.CursorShape.PointingHandCursor)
-            self._float_label.setStyleSheet(f"""
+            label.setText(f"\u2715 {text}")
+            label.setCursor(Qt.CursorShape.PointingHandCursor)
+            label.setStyleSheet(f"""
                 QPushButton {{
                     background: transparent; border: none;
-                    color: #E85454; text-align: left; padding: 0 4px;
+                    color: #E85454; text-align: left; padding: 0 1px;
                 }}
                 QPushButton:hover {{ color: {Theme.PRIMARY}; }}
             """)
         else:
-            self._float_label.setText("Float")
-            self._float_label.setCursor(Qt.CursorShape.ArrowCursor)
-            self._float_label.setStyleSheet(f"""
+            label.setText(text)
+            label.setCursor(Qt.CursorShape.ArrowCursor)
+            label.setStyleSheet(f"""
                 QPushButton {{
                     background: transparent; border: none;
                     color: {Theme.TEXT_SECONDARY}; text-align: left; padding: 0 4px;
                 }}
             """)
+
+    def _update_clear_labels(self):
+        if not self.is_charm:
+            float_active = bool(self._float_min.text() or self._float_max.text())
+            self._set_label_clear_style(self._float_label, "Float", float_active)
+
+        cur = self._filter_types[self._current_filter_idx]
+        if cur["mode"] == "single":
+            filter_active = bool(self._filter_input_single.text())
+        else:
+            filter_active = bool(self._filter_input_min.text() or self._filter_input_max.text())
+        filter_name = cur['name'] if self.is_charm else f"{cur['name']} \u25be"
+        self._set_label_clear_style(self._filter_label, filter_name, filter_active)
 
     def _check_filters_active(self):
         cur = self._filter_types[self._current_filter_idx]
@@ -1119,22 +653,45 @@ class ItemInfoDialog(QDialog):
         else:
             self._filter_values[f"{cur['name']}_min"] = self._filter_input_min.text()
             self._filter_values[f"{cur['name']}_max"] = self._filter_input_max.text()
+        self._update_clear_labels()
 
-        active = bool(
-            self._float_min.text() or self._float_max.text()
-            or any(v for v in self._filter_values.values())
-        )
-        self._update_clear_label(active)
-
-    def _clear_all_filters(self):
+    def _clear_float_filter(self):
         self._float_min.clear()
         self._float_max.clear()
+        self._update_clear_labels()
+        self._apply_filters()
+
+    def _clear_sub_filter(self):
         self._filter_input_single.clear()
         self._filter_input_min.clear()
         self._filter_input_max.clear()
-        self._filter_values.clear()
-        self._update_clear_label(False)
+        cur = self._filter_types[self._current_filter_idx]
+        if cur["mode"] == "single":
+            self._filter_values[cur["name"]] = ""
+        else:
+            self._filter_values[f"{cur['name']}_min"] = ""
+            self._filter_values[f"{cur['name']}_max"] = ""
+        self._update_clear_labels()
         self._apply_filters()
+
+    def _on_charm_label_click(self):
+        has_value = bool(self._filter_input_min.text() or self._filter_input_max.text())
+        if has_value:
+            self._clear_sub_filter()
+
+    def _on_filter_label_click(self):
+        cur = self._filter_types[self._current_filter_idx]
+        if cur["mode"] == "single":
+            has_value = bool(self._filter_input_single.text())
+        else:
+            has_value = bool(self._filter_input_min.text() or self._filter_input_max.text())
+
+        if has_value:
+            self._clear_sub_filter()
+        else:
+            self._filter_selector.exec(
+                self._filter_label.mapToGlobal(self._filter_label.rect().bottomLeft())
+            )
 
     # ══════════════════════════════════════════════════════════
     # LISTINGS TABLE
@@ -1159,7 +716,16 @@ class ItemInfoDialog(QDialog):
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(title)
 
-        cols = ["Float", "Seed", "Price", "Days"]
+        if not self.has_params:
+            cols = ["Price", "Days"]
+            col_widths = [140, 133]
+        elif self.is_charm:
+            cols = ["Pattern", "Price", "Days"]
+            col_widths = [100, 80, 93]
+        else:
+            cols = ["Float", "Seed", "Price", "Days"]
+            col_widths = [118, 56, 55, 49]
+
         self.listings_table = QTableWidget(0, len(cols))
         self.listings_table.setHorizontalHeaderLabels(cols)
         self.listings_table.setStyleSheet(Theme.table_style())
@@ -1174,49 +740,140 @@ class ItemInfoDialog(QDialog):
         h = self.listings_table.horizontalHeader()
         h.setStretchLastSection(False)
         # panel=300 - border(2) - margins(6) - table_border(2) - scrollbar(17) = 273
-        for col, w in enumerate([128, 46, 55, 49]):
+        for col, w in enumerate(col_widths):
             self.listings_table.setColumnWidth(col, w)
             h.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
+
+        self.listings_table.verticalScrollBar().valueChanged.connect(self._on_listings_scroll)
 
         lay.addWidget(self.listings_table)
         return frame
 
+    def _on_listings_scroll(self, value):
+        sb = self.listings_table.verticalScrollBar()
+        if not self._current_cursor or self._is_loading_more:
+            return
+        if value >= sb.maximum() - 2:
+            self._load_more_listings()
+
+    def _load_more_listings(self):
+        self._is_loading_more = True
+        params = self._collect_filter_params() if self.has_params else {}
+        params["cursor"] = self._current_cursor
+        pool = QThreadPool.globalInstance()
+        w = ApiWorker(
+            get_item_listings, self.api_key, self.def_index,
+            self.paint_index, self.sticker_index, self.category,
+            keychain_index=self.keychain_index,
+            **params,
+        )
+        w.signals.result.connect(self._on_more_listings_loaded)
+        w.signals.error.connect(self._on_load_more_error)
+        pool.start(w)
+
+    def _on_more_listings_loaded(self, data):
+        self._is_loading_more = False
+        if not data:
+            return
+        if isinstance(data, dict):
+            self._current_cursor = data.get("cursor")
+            new_items = data.get("data", [])
+        else:
+            new_items = data if isinstance(data, list) else []
+            self._current_cursor = None
+
+        if new_items:
+            self._listings_data.extend(new_items)
+            self.listings_table.setSortingEnabled(False)
+            self._append_listings_rows(new_items)
+            self.listings_table.setSortingEnabled(True)
+
+    def _on_load_more_error(self, error):
+        self._is_loading_more = False
+        e, tb = error
+        logging.error(f"Load more error: {e}")
+
+    def _get_active_filter_name(self):
+        return self._filter_types[self._current_filter_idx]["name"]
+
     def _populate_listings_table(self, listings):
         self.listings_table.setSortingEnabled(False)
         self.listings_table.setRowCount(0)
+        self._append_listings_rows(listings)
+        self.listings_table.setSortingEnabled(True)
+        # Сортировка по колонке Price
+        price_col = self._get_price_col()
+        self.listings_table.sortItems(price_col, Qt.SortOrder.AscendingOrder)
+
+    def _get_price_col(self):
+        if not self.has_params:
+            return 0
+        if self.is_charm:
+            return 1
+        return 2
+
+    def _append_listings_rows(self, listings):
+        active_filter = self._get_active_filter_name() if self.has_params else None
+        show_pct = active_filter in ("Fade %", "Blue %") if active_filter else False
 
         for entry in listings:
             row = self.listings_table.rowCount()
             self.listings_table.insertRow(row)
 
             item = entry.get("item", {})
-            fv = item.get("float_value", 0)
-            seed = item.get("paint_seed", 0)
             price = entry.get("price", 0)
             created = entry.get("created_at", "")
-
-            float_item = NumericItem(f"{fv:.14f}", fv)
-            float_item.setFont(QFont(Theme.FONT_FAMILY, Theme.FONT_SIZE_SMALL))
-            self.listings_table.setItem(row, 0, float_item)
-
-            seed_item = NumericItem(str(seed), seed)
-            self.listings_table.setItem(row, 1, seed_item)
-
-            price_item = NumericItem(cents_to_dollars(price), price)
-            price_item.setForeground(QColor(Theme.PRIMARY))
-            price_item.setFont(QFont(Theme.FONT_FAMILY, Theme.FONT_SIZE, QFont.Weight.Bold))
-            self.listings_table.setItem(row, 2, price_item)
 
             try:
                 dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
                 days_val = (datetime.now(timezone.utc) - dt).total_seconds()
             except Exception:
                 days_val = 0
-            days_item = NumericItem(days_ago(created), days_val)
-            self.listings_table.setItem(row, 3, days_item)
 
-        self.listings_table.setSortingEnabled(True)
-        self.listings_table.sortItems(2, Qt.SortOrder.AscendingOrder)
+            if not self.has_params:
+                # Стикеры, кейсы и тп: Price | Days
+                price_item = NumericItem(cents_to_dollars(price), price)
+                price_item.setForeground(QColor(Theme.PRIMARY))
+                price_item.setFont(QFont(Theme.FONT_FAMILY, Theme.FONT_SIZE, QFont.Weight.Bold))
+                self.listings_table.setItem(row, 0, price_item)
+                self.listings_table.setItem(row, 1, NumericItem(days_ago(created), days_val))
+
+            elif self.is_charm:
+                # Брелки: Pattern | Price | Days
+                pattern = item.get("keychain_pattern", 0)
+                pat_item = NumericItem(str(pattern), pattern)
+                self.listings_table.setItem(row, 0, pat_item)
+
+                price_item = NumericItem(cents_to_dollars(price), price)
+                price_item.setForeground(QColor(Theme.PRIMARY))
+                price_item.setFont(QFont(Theme.FONT_FAMILY, Theme.FONT_SIZE, QFont.Weight.Bold))
+                self.listings_table.setItem(row, 1, price_item)
+                self.listings_table.setItem(row, 2, NumericItem(days_ago(created), days_val))
+
+            else:
+                # Скины: Float | Seed | Price | Days
+                fv = item.get("float_value", 0)
+                seed = item.get("paint_seed", 0)
+
+                float_item = NumericItem(f"{fv:.14f}", fv)
+                float_item.setFont(QFont(Theme.FONT_FAMILY, Theme.FONT_SIZE_SMALL))
+                self.listings_table.setItem(row, 0, float_item)
+
+                if show_pct:
+                    if active_filter == "Fade %":
+                        pct_val = (item.get("fade") or {}).get("percentage", 0)
+                    else:
+                        pct_val = (item.get("blue_gem") or {}).get("playside_blue", 0)
+                    col1_item = NumericItem(f"{pct_val:.1f}%", pct_val)
+                else:
+                    col1_item = NumericItem(str(seed), seed)
+                self.listings_table.setItem(row, 1, col1_item)
+
+                price_item = NumericItem(cents_to_dollars(price), price)
+                price_item.setForeground(QColor(Theme.PRIMARY))
+                price_item.setFont(QFont(Theme.FONT_FAMILY, Theme.FONT_SIZE, QFont.Weight.Bold))
+                self.listings_table.setItem(row, 2, price_item)
+                self.listings_table.setItem(row, 3, NumericItem(days_ago(created), days_val))
 
     # ══════════════════════════════════════════════════════════
     # RECENT SALES
@@ -1241,8 +898,18 @@ class ItemInfoDialog(QDialog):
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(title)
 
-        self._sales_table = QTableWidget(0, 4)
-        self._sales_table.setHorizontalHeaderLabels(["Price", "Float", "Seed", "Ago"])
+        if not self.has_params:
+            sales_cols = ["Price", "Ago"]
+            sales_widths = [140, 133]
+        elif self.is_charm:
+            sales_cols = ["Price", "Pattern", "Ago"]
+            sales_widths = [70, 110, 98]
+        else:
+            sales_cols = ["Price", "Float", "Seed", "Ago"]
+            sales_widths = [50, 123, 58, 47]
+
+        self._sales_table = QTableWidget(0, len(sales_cols))
+        self._sales_table.setHorizontalHeaderLabels(sales_cols)
         self._sales_table.setStyleSheet(Theme.table_style())
         self._sales_table.horizontalHeader().setStyleSheet(Theme.table_header_style())
         self._sales_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -1253,7 +920,7 @@ class ItemInfoDialog(QDialog):
 
         h = self._sales_table.horizontalHeader()
         h.setStretchLastSection(False)
-        for col, w in enumerate([50, 133, 48, 47]):
+        for col, w in enumerate(sales_widths):
             self._sales_table.setColumnWidth(col, w)
             h.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
 
@@ -1264,14 +931,15 @@ class ItemInfoDialog(QDialog):
         tbl = self._sales_table
         tbl.setRowCount(0)
 
+        active_filter = self._get_active_filter_name() if self.has_params else None
+        show_pct = active_filter in ("Fade %", "Blue %") if active_filter else False
+
         for sale in sales[:40]:
             r = tbl.rowCount()
             tbl.insertRow(r)
 
             price = sale.get("price", 0)
             item = sale.get("item", {})
-            fv = item.get("float_value", 0)
-            seed = item.get("paint_seed", 0)
             sold = sale.get("sold_at", "")
 
             p = QTableWidgetItem(cents_to_dollars(price))
@@ -1279,14 +947,35 @@ class ItemInfoDialog(QDialog):
             p.setFont(QFont(Theme.FONT_FAMILY, Theme.FONT_SIZE, QFont.Weight.Bold))
             tbl.setItem(r, 0, p)
 
-            f = QTableWidgetItem(f"{fv:.12f}")
-            f.setFont(QFont(Theme.FONT_FAMILY, Theme.FONT_SIZE_SMALL))
-            tbl.setItem(r, 1, f)
+            if not self.has_params:
+                # Стикеры, кейсы: Price | Ago
+                tbl.setItem(r, 1, QTableWidgetItem(days_ago(sold)))
 
-            s = QTableWidgetItem(str(seed))
-            tbl.setItem(r, 2, s)
+            elif self.is_charm:
+                # Брелки: Price | Pattern | Ago
+                pattern = item.get("keychain_pattern", 0)
+                tbl.setItem(r, 1, QTableWidgetItem(str(pattern)))
+                tbl.setItem(r, 2, QTableWidgetItem(days_ago(sold)))
+            else:
+                # Скины: Price | Float | Seed | Ago
+                fv = item.get("float_value", 0)
+                seed = item.get("paint_seed", 0)
 
-            tbl.setItem(r, 3, QTableWidgetItem(days_ago(sold)))
+                f = QTableWidgetItem(f"{fv:.12f}")
+                f.setFont(QFont(Theme.FONT_FAMILY, Theme.FONT_SIZE_SMALL))
+                tbl.setItem(r, 1, f)
+
+                if show_pct:
+                    if active_filter == "Fade %":
+                        pct_val = (item.get("fade") or {}).get("percentage", 0)
+                    else:
+                        pct_val = (item.get("blue_gem") or {}).get("playside_blue", 0)
+                    s = QTableWidgetItem(f"{pct_val:.1f}%")
+                else:
+                    s = QTableWidgetItem(str(seed))
+                tbl.setItem(r, 2, s)
+
+                tbl.setItem(r, 3, QTableWidgetItem(days_ago(sold)))
 
     # ══════════════════════════════════════════════════════════
     # BUY ORDERS
@@ -1324,7 +1013,7 @@ class ItemInfoDialog(QDialog):
 
         h = self._orders_table.horizontalHeader()
         h.setStretchLastSection(False)
-        for col, w in enumerate([55, 35, 188]):
+        for col, w in enumerate([55, 35, 183]):
             self._orders_table.setColumnWidth(col, w)
             h.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
 
@@ -1428,6 +1117,24 @@ class ItemInfoDialog(QDialog):
         for btn in self._period_buttons:
             btn.setChecked(btn is active_btn)
         self._chart.set_period(days)
+
+    def _on_listing_double_click(self, row, col):
+        price_col = self._get_price_col()
+        if col == price_col:
+            item = self.listings_table.item(row, price_col)
+            if isinstance(item, NumericItem):
+                self.price_selected.emit(item._sort_value)
+
+    def _on_sale_double_click(self, row, col):
+        if col == 0:
+            item = self._sales_table.item(row, 0)
+            if item:
+                text = item.text().replace("$", "").strip()
+                try:
+                    cents = int(round(float(text) * 100))
+                    self.price_selected.emit(cents)
+                except ValueError:
+                    pass
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

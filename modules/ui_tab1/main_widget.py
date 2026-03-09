@@ -19,7 +19,7 @@ from modules.models.columns import (
     COL_DAYS, COL_PRICE, COL_LISTING_ID, COL_ASSET_ID, COL_CREATED_AT,
     COL_PRICE_VALUE, COL_API_KEY, COL_COLLECTION, COL_RARITY, COL_WEAR,
     COL_DEF_INDEX, COL_PAINT_INDEX, COL_INSPECT_LINK, COL_ICON_URL,
-    COL_STICKER_INDEX,
+    COL_STICKER_INDEX, COL_KEYCHAIN_INDEX,
     DEFAULT_COLUMN_WIDTHS,
 )
 from modules.models.inventory_store import InventoryStore
@@ -272,9 +272,14 @@ class Tab1(QWidget):
             wear_name=_col_text(COL_WEAR),
             api_key=_col_text(COL_API_KEY),
             icon_url=_col_text(COL_ICON_URL),
+            keychain_index=_col_text(COL_KEYCHAIN_INDEX),
             parent=self,
         )
+        dlg.price_selected.connect(self._on_item_info_price)
         dlg.exec()
+
+    def _on_item_info_price(self, cents):
+        self.price_input.setText(f"{cents / 100:.2f}")
 
     def refresh_styles(self):
         """Переприменить стили всех виджетов после смены темы."""
