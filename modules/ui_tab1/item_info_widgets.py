@@ -103,6 +103,16 @@ def calc_score(data, days, metric):
         cv = statistics.stdev(prices) / statistics.mean(prices)
     stability = 1 / (1 + cv)
 
+    if metric == "demand":
+        # Сравниваем объём второй половины периода с первой
+        mid = len(data) // 2
+        if mid == 0:
+            return 0
+        first_half = sum(d["count"] for d in data[:mid])
+        second_half = sum(d["count"] for d in data[mid:])
+        if first_half == 0:
+            return round(second_half, 1) if second_half else 0
+        return round(second_half / first_half, 2)
     if metric == "trade":
         base = math.log(1 + daily_vol) * math.log(1 + price_usd)
         return round(base * stability * 10, 1)
@@ -312,7 +322,8 @@ class SingleArcCircle(QWidget):
     def mouseMoveEvent(self, event):
         if self._hovered:
             vol_str = f"{self.volume}/d" if self.vol_mode in ("avg_day", "med_day") else str(self.volume)
-            score_label = "Trade Rating" if self.score_mode == "trade" else "Market Score"
+            score_labels = {"trade": "Trade Rating", "demand": "Demand", "market": "Market Score"}
+            score_label = score_labels.get(self.score_mode, "Market Score")
             text = (f"{score_label}: {self.score:.2f}\n"
                     f"Price: ${self.price_val:.2f}\n"
                     f"Volume: {vol_str}\n"

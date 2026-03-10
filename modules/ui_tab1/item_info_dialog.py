@@ -9,9 +9,8 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem, QLabel, QWidget, QPushButton, QHeaderView,
     QAbstractItemView, QFrame, QLineEdit, QMenu,
 )
-from PyQt6.QtGui import QFont, QColor, QPixmap
+from PyQt6.QtGui import QFont, QColor, QPixmap, QIcon, QActionGroup
 from PyQt6.QtCore import Qt, QTimer, QThreadPool, QSettings, pyqtSignal
-from PyQt6.QtGui import QActionGroup
 
 from modules.theme import Theme
 from modules.loading_spinner import LoadingOverlay
@@ -70,17 +69,21 @@ class ItemInfoDialog(QDialog):
         self._is_loading_more = False
 
         # Настройки статистики
-        _s = QSettings("MyCompany", "SteamInventoryApp")
+        self._settings = QSettings("MyCompany", "SteamInventoryApp")
         self._stats_config = {
-            "score": _s.value("stats_score_metric", "market", type=str),
-            "price": _s.value("stats_price_metric", "median", type=str),
-            "volume": _s.value("stats_volume_metric", "total", type=str),
-            "volatility": _s.value("stats_volatility_metric", "cv", type=str),
+            "score": self._settings.value("stats_score_metric", "market", type=str),
+            "price": self._settings.value("stats_price_metric", "median", type=str),
+            "volume": self._settings.value("stats_volume_metric", "total", type=str),
+            "volatility": self._settings.value("stats_volatility_metric", "cv", type=str),
         }
 
         self.setWindowTitle(self.item_name)
-        self.resize(636, 680)
-        self.setMinimumSize(600, 550)
+        fixed_width = 636
+        default_height = 680
+        saved_height = self._settings.value("item_info_height", default_height, type=int)
+        self.setFixedWidth(fixed_width)
+        self.setMinimumHeight(550)
+        self.resize(fixed_width, max(saved_height, 550))
         self.setStyleSheet(f"""
             QDialog {{ background-color: {Theme.BG_WHITE}; }}
             QLabel {{ color: {Theme.TEXT_PRIMARY}; }}
@@ -94,18 +97,29 @@ class ItemInfoDialog(QDialog):
         QTimer.singleShot(50, self._start_loading)
 
     def _build_settings_btn(self):
-        self._stats_btn = QPushButton("\u2699", self)
+        from modules.ui_tab1.ui_components import change_icon_color
+
+        self._stats_btn = QPushButton(self)
         self._stats_btn.setFixedSize(22, 22)
+        self._stats_btn.setIconSize(self._stats_btn.size())
         self._stats_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._stats_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: transparent; border: none;
-                color: {Theme.TEXT_SECONDARY}; font-size: 13pt;
-            }}
-            QPushButton:hover {{ color: {Theme.PRIMARY}; }}
+        self._stats_btn.setStyleSheet("""
+            QPushButton { background: transparent; border: none; }
         """)
         self._stats_btn.clicked.connect(self._show_stats_menu)
+
+        icon_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__)))), "utils", "icons")
+        settings_path = os.path.join(icon_dir, "settings.png")
+        self._settings_icon_path = settings_path
+        self._update_settings_icon()
         self._position_settings_btn()
+
+    def _update_settings_icon(self):
+        from modules.ui_tab1.ui_components import change_icon_color
+        pm = change_icon_color(self._settings_icon_path, Theme.TEXT_SECONDARY)
+        if pm and not pm.isNull():
+            self._stats_btn.setIcon(QIcon(pm))
 
     def _position_settings_btn(self):
         self._stats_btn.move(self.width() - 30, 6)
@@ -346,13 +360,24 @@ class ItemInfoDialog(QDialog):
     def _show_stats_menu(self):
         menu = QMenu(self)
         menu.setStyleSheet(Theme.menu_style())
+        menu.setToolTipsVisible(True)
 
         score_menu = menu.addMenu("Score")
+        score_menu.setToolTipsVisible(True)
         score_group = QActionGroup(score_menu)
-        for key, label in [("market", "Market Score"), ("trade", "Trade Rating")]:
+        score_items = [
+            ("market", "Market Score",
+             "Liquidity × price stability. Ignores item price"),
+            ("trade", "Trade Rating",
+             "Liquidity × price stability × item value"),
+            ("demand", "Demand",
+             "Volume trend: >1 = growing demand, <1 = declining"),
+        ]
+        for key, label, tip in score_items:
             action = score_menu.addAction(label)
             action.setCheckable(True)
             action.setChecked(self._stats_config["score"] == key)
+            action.setToolTip(tip)
             action.triggered.connect(lambda _, k=key: self._set_stats("score", k))
             score_group.addAction(action)
 
@@ -377,11 +402,19 @@ class ItemInfoDialog(QDialog):
             vol_group.addAction(action)
 
         volat_menu = menu.addMenu("Volatility")
+        volat_menu.setToolTipsVisible(True)
         volat_group = QActionGroup(volat_menu)
-        for key, label in [("cv", "CV (std/mean)"), ("range_pct", "Range (max-min)/med")]:
+        volat_items = [
+            ("cv", "Coefficient of Variation",
+             "Standard deviation / mean price. Lower = more stable"),
+            ("range_pct", "Price Range",
+             "Price spread (max−min) as % of median"),
+        ]
+        for key, label, tip in volat_items:
             action = volat_menu.addAction(label)
             action.setCheckable(True)
             action.setChecked(self._stats_config["volatility"] == key)
+            action.setToolTip(tip)
             action.triggered.connect(lambda _, k=key: self._set_stats("volatility", k))
             volat_group.addAction(action)
 
@@ -596,17 +629,31 @@ class ItemInfoDialog(QDialog):
             self._filter_values[f"{cur['name']}_min"] = self._filter_input_min.text()
             self._filter_values[f"{cur['name']}_max"] = self._filter_input_max.text()
 
-        self._fetch_listings_with_filters(self._collect_filter_params())
+        self._fetch_listings_with_filters(self._build_listing_params())
 
-    def _fetch_listings_with_filters(self, extra_params):
+    def _build_listing_params(self):
+        """Полный набор параметров для API запроса листингов."""
+        params = self._collect_filter_params() if self.has_params else {}
+
+        # Дефолтный wear range если пользователь не задал свой
+        if self.paint_index and "min_float" not in params and self.wear_min is not None:
+            params["min_float"] = self.wear_min
+        if self.paint_index and "max_float" not in params and self.wear_max is not None:
+            params["max_float"] = self.wear_max
+
+        return params
+
+    def _fetch_listings_with_filters(self, extra_params=None):
         """API запрос с текущими фильтрами."""
         self._current_cursor = None
+        params = extra_params if extra_params is not None else self._build_listing_params()
+
         pool = QThreadPool.globalInstance()
         w = ApiWorker(
             get_item_listings, self.api_key, self.def_index,
             self.paint_index, self.sticker_index, self.category,
             keychain_index=self.keychain_index,
-            **extra_params,
+            **params,
         )
         w.signals.result.connect(self._on_listings_loaded)
         w.signals.error.connect(self._on_request_error)
@@ -758,7 +805,7 @@ class ItemInfoDialog(QDialog):
 
     def _load_more_listings(self):
         self._is_loading_more = True
-        params = self._collect_filter_params() if self.has_params else {}
+        params = self._build_listing_params()
         params["cursor"] = self._current_cursor
         pool = QThreadPool.globalInstance()
         w = ApiWorker(
@@ -906,7 +953,7 @@ class ItemInfoDialog(QDialog):
             sales_widths = [70, 110, 98]
         else:
             sales_cols = ["Price", "Float", "Seed", "Ago"]
-            sales_widths = [50, 123, 58, 47]
+            sales_widths = [60, 113, 58, 47]
 
         self._sales_table = QTableWidget(0, len(sales_cols))
         self._sales_table.setHorizontalHeaderLabels(sales_cols)
@@ -1142,3 +1189,7 @@ class ItemInfoDialog(QDialog):
             self._loading.setGeometry(self.rect())
         if hasattr(self, '_stats_btn'):
             self._position_settings_btn()
+
+    def closeEvent(self, event):
+        self._settings.setValue("item_info_height", self.height())
+        super().closeEvent(event)

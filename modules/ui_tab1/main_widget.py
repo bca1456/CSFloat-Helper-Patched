@@ -11,7 +11,7 @@ from modules.theme import Theme
 from modules.api import get_user_info, get_inventory_data, get_stall_data, get_schema
 from modules.workers import ApiWorker, KeepOnlineWorker
 from modules.loading_spinner import LoadingOverlay
-from modules.collections_manager import update_collections_from_schema, get_collections
+from modules.collections_manager import update_collections_from_schema, get_collections, needs_update
 from modules.utils import key_id, migrate_settings, shutdown_image_pool
 from .constants import refresh_collections
 from modules.models.columns import (
@@ -273,7 +273,7 @@ class Tab1(QWidget):
             api_key=_col_text(COL_API_KEY),
             icon_url=_col_text(COL_ICON_URL),
             keychain_index=_col_text(COL_KEYCHAIN_INDEX),
-            parent=self,
+            parent=self.window(),
         )
         dlg.price_selected.connect(self._on_item_info_price)
         dlg.exec()
@@ -376,10 +376,11 @@ class Tab1(QWidget):
         self.ops._set_buttons_enabled(False)
         self._loading_overlay.start("Loading inventory...")
 
-        schema_worker = ApiWorker(self.fetch_schema)
-        schema_worker.signals.result.connect(self.handle_schema_result)
-        schema_worker.signals.error.connect(self.handle_schema_error)
-        threadpool.start(schema_worker)
+        if needs_update():
+            schema_worker = ApiWorker(self.fetch_schema)
+            schema_worker.signals.result.connect(self.handle_schema_result)
+            schema_worker.signals.error.connect(self.handle_schema_error)
+            threadpool.start(schema_worker)
 
         for api_key in self.api_keys:
             cached_steam_id = self.settings.value(
