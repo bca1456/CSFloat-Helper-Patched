@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTableWidget,
     QTableWidgetItem, QLabel, QWidget, QPushButton, QHeaderView,
-    QAbstractItemView, QFrame, QLineEdit, QMenu,
+    QAbstractItemView, QFrame, QLineEdit, QMenu, QStackedWidget,
 )
 from PyQt6.QtGui import QFont, QColor, QPixmap, QIcon, QActionGroup
 from PyQt6.QtCore import Qt, QTimer, QThreadPool, QSettings, pyqtSignal
@@ -19,6 +19,7 @@ from modules.utils import cache_image_async, days_ago, cents_to_dollars
 from modules.api import (
     get_item_listings, get_item_sales, get_item_buy_orders, get_item_graph,
 )
+from modules.collections_manager import get_collection_keys
 from modules.ui_tab1.constants import WEAR_FLOAT_RANGES
 from modules.ui_tab1.item_info_widgets import (
     STATS_SETTINGS_KEYS, NumericItem, SingleArcCircle, PriceChart,
@@ -31,7 +32,8 @@ class ItemInfoDialog(QDialog):
     price_selected = pyqtSignal(int)
     def __init__(self, market_hash_name, def_index, paint_index,
                  sticker_index="", inspect_link="", wear_name="",
-                 api_key="", icon_url="", keychain_index="", parent=None):
+                 api_key="", icon_url="", keychain_index="",
+                 collection="", rarity="", parent=None):
         super().__init__(parent)
 
         self.item_name = market_hash_name
@@ -43,8 +45,15 @@ class ItemInfoDialog(QDialog):
         self.wear_name = wear_name
         self.api_key = api_key
         self.keychain_index = keychain_index
+        self.collection = collection
+        self.rarity = rarity
         self.is_charm = bool(keychain_index)
         self.has_params = bool(paint_index or keychain_index)
+
+        # Collection compare
+        keys = get_collection_keys()
+        self.collection_key = keys.get(collection, "")
+        self._can_collection = bool(self.collection_key and self.rarity and self.paint_index)
 
         self.is_stattrak = "StatTrak\u2122" in market_hash_name
         self.is_souvenir = "Souvenir" in market_hash_name
@@ -67,6 +76,12 @@ class ItemInfoDialog(QDialog):
         self._pending_requests = 0
         self._current_cursor = None
         self._is_loading_more = False
+        self._listings_request_id = 0
+        self._collection_data = []
+        self._collection_cursor = None
+        self._is_loading_more_collection = False
+        self._collection_request_id = 0
+        self._collection_mode = False
 
         # Настройки статистики
         self._settings = QSettings("MyCompany", "SteamInventoryApp")
@@ -100,6 +115,7 @@ class ItemInfoDialog(QDialog):
         from modules.ui_tab1.ui_components import change_icon_color
 
         self._stats_btn = QPushButton(self)
+        self._stats_btn.setAutoDefault(False)
         self._stats_btn.setFixedSize(22, 22)
         self._stats_btn.setIconSize(self._stats_btn.size())
         self._stats_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -140,8 +156,8 @@ class ItemInfoDialog(QDialog):
         self._fetch_all_data()
 
     def _fetch_all_data(self):
-        """Запускаем 4 параллельных запроса."""
-        self._pending_requests = 4
+        """Запускаем параллельные запросы."""
+        self._pending_requests = 5 if self._can_collection else 4
         pool = QThreadPool.globalInstance()
 
         # 1. Listings
@@ -162,8 +178,6 @@ class ItemInfoDialog(QDialog):
         pool.start(w2)
 
         # 3. Buy Orders
-        # Скины (paint_index) → GET /buy-orders/item по inspect_link
-        # Стикеры, кейсы и тд → POST /buy-orders/similar-orders
         if self.paint_index and self.inspect_link:
             w3 = ApiWorker(
                 get_item_buy_orders, self.api_key,
@@ -183,6 +197,20 @@ class ItemInfoDialog(QDialog):
         w4.signals.result.connect(self._on_graph_loaded)
         w4.signals.error.connect(self._on_request_error)
         pool.start(w4)
+
+        # 5. Collection compare
+        if self._can_collection:
+            w5 = ApiWorker(
+                get_item_listings, self.api_key, None,
+                collection=self.collection_key,
+                rarity=self.rarity,
+                category=self.category,
+                min_float=self.wear_min,
+                max_float=self.wear_max,
+            )
+            w5.signals.result.connect(self._on_collection_loaded)
+            w5.signals.error.connect(self._on_request_error)
+            pool.start(w5)
 
     def _on_request_done(self):
         self._pending_requests -= 1
@@ -244,15 +272,50 @@ class ItemInfoDialog(QDialog):
 
         panel_w = 300
 
-        mid = QHBoxLayout()
-        mid.setSpacing(6)
+        self._stacked = QStackedWidget()
+
+        # Page 0: listings + sales
+        item_page = QWidget()
+        item_lay = QHBoxLayout(item_page)
+        item_lay.setContentsMargins(0, 0, 0, 0)
+        item_lay.setSpacing(6)
         listings_panel = self._build_listings_panel()
         listings_panel.setFixedWidth(panel_w)
-        mid.addWidget(listings_panel)
+        item_lay.addWidget(listings_panel)
         sales_panel = self._build_sales_panel()
         sales_panel.setFixedWidth(panel_w)
-        mid.addWidget(sales_panel)
-        root.addLayout(mid, stretch=1)
+        item_lay.addWidget(sales_panel)
+        self._stacked.addWidget(item_page)
+
+        # Page 1: collection compare
+        if self._can_collection:
+            collection_panel = self._build_collection_panel()
+            self._stacked.addWidget(collection_panel)
+
+        # 300 + 6 + 300 = 606 — ровно как listings + spacing + sales
+        self._stacked.setFixedWidth(606)
+        root.addWidget(self._stacked, stretch=1)
+
+        # Кнопка-стрелка между listings и sales (overlay)
+        if self._can_collection:
+            self._toggle_btn = QPushButton(">", self)
+            self._toggle_btn.setFixedWidth(10)
+            self._toggle_btn.setAutoDefault(False)
+            self._toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._toggle_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: transparent;
+                    border: none;
+                    color: {Theme.TEXT_SECONDARY};
+                    font-size: 9px;
+                    padding: 0;
+                }}
+                QPushButton:hover {{
+                    background: {Theme.BG_HOVER};
+                    color: {Theme.TEXT_PRIMARY};
+                }}
+            """)
+            self._toggle_btn.clicked.connect(self._toggle_collection_view)
 
         self.listings_table.cellDoubleClicked.connect(self._on_listing_double_click)
         self._sales_table.cellDoubleClicked.connect(self._on_sale_double_click)
@@ -303,6 +366,7 @@ class ItemInfoDialog(QDialog):
             self._float_label.setFixedSize(label_w, input_h)
             self._float_label.setFont(QFont(Theme.FONT_FAMILY, Theme.FONT_SIZE))
             self._float_label.setCursor(Qt.CursorShape.ArrowCursor)
+            self._float_label.setAutoDefault(False)
             self._set_label_clear_style(self._float_label, "Float", False)
             self._float_label.clicked.connect(self._clear_float_filter)
             row1.addWidget(self._float_label)
@@ -475,6 +539,7 @@ class ItemInfoDialog(QDialog):
         self._filter_label = QPushButton("Seed \u25be")
         self._filter_label.setFont(QFont(Theme.FONT_FAMILY, Theme.FONT_SIZE))
         self._filter_label.setFixedSize(label_w, input_h)
+        self._filter_label.setAutoDefault(False)
         self._filter_label.setStyleSheet(f"""
             QPushButton {{
                 background: transparent;
@@ -576,7 +641,8 @@ class ItemInfoDialog(QDialog):
         try:
             if not text:
                 return None
-            return float(text.strip()) if text.strip() else None
+            cleaned = text.strip().replace(",", ".")
+            return float(cleaned) if cleaned else None
         except ValueError:
             return None
 
@@ -593,9 +659,18 @@ class ItemInfoDialog(QDialog):
 
         active = self._get_active_filter_name()
         if active == "Seed":
-            seeds = self._filter_values.get("Seed", "").strip()
-            if seeds:
-                params["paint_seed"] = seeds
+            raw = self._filter_values.get("Seed", "").strip()
+            if raw:
+                valid = []
+                for s in raw.replace(" ", "").split(","):
+                    try:
+                        v = int(float(s))
+                        if 0 <= v <= 1000:
+                            valid.append(str(v))
+                    except (ValueError, OverflowError):
+                        pass
+                if valid:
+                    params["paint_seed"] = ",".join(valid)
         elif active == "Fade %":
             v = self._parse_float(self._filter_values.get("Fade %_min"))
             if v is not None:
@@ -629,7 +704,11 @@ class ItemInfoDialog(QDialog):
             self._filter_values[f"{cur['name']}_min"] = self._filter_input_min.text()
             self._filter_values[f"{cur['name']}_max"] = self._filter_input_max.text()
 
-        self._fetch_listings_with_filters(self._build_listing_params())
+        self._update_clear_labels()
+
+        self._fetch_listings_with_filters()
+        if self._can_collection:
+            self._fetch_collection_with_filters()
 
     def _build_listing_params(self):
         """Полный набор параметров для API запроса листингов."""
@@ -646,6 +725,8 @@ class ItemInfoDialog(QDialog):
     def _fetch_listings_with_filters(self, extra_params=None):
         """API запрос с текущими фильтрами."""
         self._current_cursor = None
+        self._listings_request_id += 1
+        req_id = self._listings_request_id
         params = extra_params if extra_params is not None else self._build_listing_params()
 
         pool = QThreadPool.globalInstance()
@@ -655,9 +736,24 @@ class ItemInfoDialog(QDialog):
             keychain_index=self.keychain_index,
             **params,
         )
-        w.signals.result.connect(self._on_listings_loaded)
+        w.signals.result.connect(lambda data, rid=req_id: self._on_filter_listings_loaded(data, rid))
         w.signals.error.connect(self._on_request_error)
         pool.start(w)
+
+    def _on_filter_listings_loaded(self, data, req_id):
+        """Обработка ответа фильтрации — игнорирует устаревшие запросы."""
+        if req_id != self._listings_request_id:
+            return
+        if data:
+            if isinstance(data, dict):
+                self._current_cursor = data.get("cursor")
+                listings = data.get("data", [])
+            else:
+                listings = data if isinstance(data, list) else []
+                self._current_cursor = None
+            if isinstance(listings, list):
+                self._listings_data = listings
+                self._populate_listings_table(listings)
 
     def _set_label_clear_style(self, label, text, active):
         if active:
@@ -676,7 +772,7 @@ class ItemInfoDialog(QDialog):
             label.setStyleSheet(f"""
                 QPushButton {{
                     background: transparent; border: none;
-                    color: {Theme.TEXT_SECONDARY}; text-align: left; padding: 0 4px;
+                    color: {Theme.PRIMARY}; text-align: left; padding: 0 4px;
                 }}
             """)
 
@@ -1025,6 +1121,224 @@ class ItemInfoDialog(QDialog):
                 tbl.setItem(r, 3, QTableWidgetItem(days_ago(sold)))
 
     # ══════════════════════════════════════════════════════════
+    # COLLECTION COMPARE
+    # ══════════════════════════════════════════════════════════
+
+    def _build_collection_panel(self):
+        frame = QFrame()
+        frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: {Theme.BG_WHITE};
+                border: 1px solid {Theme.BORDER_GRID};
+                border-radius: {Theme.RADIUS}px;
+            }}
+        """)
+        lay = QVBoxLayout(frame)
+        lay.setContentsMargins(3, 3, 3, 3)
+        lay.setSpacing(2)
+
+        title = QLabel(f"Collection: {self.collection}")
+        title.setFont(QFont(Theme.FONT_FAMILY, 9))
+        title.setStyleSheet(f"color: {Theme.TEXT_SECONDARY}; border: none;")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(title)
+
+        # stacked = 606 (300+300+6), frame fills it entirely
+        # available = 606 - border(2) - margins(6) - table_border(2) - scrollbar(17) = 579
+        cols = ["Name", "Float", "Price", "Days"]
+        col_widths = [245, 130, 105, 99]
+
+        self._collection_table = QTableWidget(0, len(cols))
+        self._collection_table.setHorizontalHeaderLabels(cols)
+        self._collection_table.setStyleSheet(Theme.table_style())
+        self._collection_table.horizontalHeader().setStyleSheet(Theme.table_header_style())
+        self._collection_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._collection_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._collection_table.verticalHeader().setDefaultSectionSize(28)
+        self._collection_table.verticalHeader().setVisible(False)
+        self._collection_table.setAlternatingRowColors(True)
+        self._collection_table.setSortingEnabled(True)
+
+        h = self._collection_table.horizontalHeader()
+        h.setStretchLastSection(False)
+        for col, w in enumerate(col_widths):
+            self._collection_table.setColumnWidth(col, w)
+            h.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
+
+        self._collection_table.verticalScrollBar().valueChanged.connect(
+            self._on_collection_scroll)
+        self._collection_table.cellDoubleClicked.connect(
+            self._on_collection_double_click)
+
+        lay.addWidget(self._collection_table)
+        return frame
+
+    def _position_toggle_btn(self):
+        """Размещает кнопку '>' слева от listings panel."""
+        stacked_geo = self._stacked.geometry()
+        btn_x = stacked_geo.x() - self._toggle_btn.width()
+        btn_y = stacked_geo.y()
+        btn_h = stacked_geo.height()
+        self._toggle_btn.setGeometry(btn_x, btn_y, 10, btn_h)
+        self._toggle_btn.raise_()
+
+    def _toggle_collection_view(self):
+        self._collection_mode = not self._collection_mode
+        self._stacked.setCurrentIndex(1 if self._collection_mode else 0)
+        self._toggle_btn.setText("<" if self._collection_mode else ">")
+
+    def _on_collection_loaded(self, data):
+        self._on_request_done()
+        if not data:
+            return
+        if isinstance(data, dict):
+            self._collection_cursor = data.get("cursor")
+            listings = data.get("data", [])
+        else:
+            listings = data if isinstance(data, list) else []
+            self._collection_cursor = None
+        self._collection_data = listings
+        self._populate_collection_table(listings)
+
+    def _populate_collection_table(self, listings):
+        self._collection_table.setSortingEnabled(False)
+        self._collection_table.setRowCount(0)
+        self._append_collection_rows(listings)
+        self._collection_table.setSortingEnabled(True)
+        self._collection_table.sortByColumn(2, Qt.SortOrder.AscendingOrder)
+
+    def _append_collection_rows(self, listings):
+        for entry in listings:
+            row = self._collection_table.rowCount()
+            self._collection_table.insertRow(row)
+
+            item = entry.get("item", {})
+            price = entry.get("price", 0)
+            created = entry.get("created_at", "")
+
+            # Name — короткое имя без StatTrak/Souvenir/wear
+            name = item.get("market_hash_name", "")
+            name_item = QTableWidgetItem(name)
+            name_item.setFont(QFont(Theme.FONT_FAMILY, Theme.FONT_SIZE_SMALL))
+            self._collection_table.setItem(row, 0, name_item)
+
+            # Float
+            fv = item.get("float_value", 0)
+            float_item = NumericItem(f"{fv:.14f}", fv)
+            float_item.setFont(QFont(Theme.FONT_FAMILY, Theme.FONT_SIZE_SMALL))
+            self._collection_table.setItem(row, 1, float_item)
+
+            # Price
+            price_item = NumericItem(cents_to_dollars(price), price)
+            price_item.setForeground(QColor(Theme.PRIMARY))
+            price_item.setFont(QFont(Theme.FONT_FAMILY, Theme.FONT_SIZE, QFont.Weight.Bold))
+            self._collection_table.setItem(row, 2, price_item)
+
+            # Days
+            self._collection_table.setItem(row, 3, NumericItem(
+                days_ago(created),
+                self._days_sort_value(created),
+            ))
+
+    def _days_sort_value(self, created):
+        try:
+            dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+            return (datetime.now(timezone.utc) - dt).total_seconds()
+        except Exception:
+            return 0
+
+    def _on_collection_scroll(self, value):
+        sb = self._collection_table.verticalScrollBar()
+        if not self._collection_cursor or self._is_loading_more_collection:
+            return
+        if value >= sb.maximum() - 2:
+            self._load_more_collection()
+
+    def _load_more_collection(self):
+        self._is_loading_more_collection = True
+        params = self._build_collection_params()
+        params["cursor"] = self._collection_cursor
+        pool = QThreadPool.globalInstance()
+        w = ApiWorker(get_item_listings, self.api_key, None, **params)
+        w.signals.result.connect(self._on_more_collection_loaded)
+        w.signals.error.connect(self._on_collection_load_error)
+        pool.start(w)
+
+    def _on_more_collection_loaded(self, data):
+        self._is_loading_more_collection = False
+        if not data:
+            return
+        if isinstance(data, dict):
+            self._collection_cursor = data.get("cursor")
+            new_items = data.get("data", [])
+        else:
+            new_items = data if isinstance(data, list) else []
+            self._collection_cursor = None
+        if new_items:
+            self._collection_data.extend(new_items)
+            self._collection_table.setSortingEnabled(False)
+            self._append_collection_rows(new_items)
+            self._collection_table.setSortingEnabled(True)
+
+    def _on_collection_load_error(self, error):
+        self._is_loading_more_collection = False
+        logging.error(f"Collection load more error: {error[0]}")
+
+    def _build_collection_params(self):
+        """Параметры для collection запроса."""
+        params = {
+            "collection": self.collection_key,
+            "rarity": self.rarity,
+            "category": self.category,
+        }
+        # Добавляем фильтры если есть
+        if self.has_params:
+            filter_params = self._collect_filter_params()
+            params.update(filter_params)
+        # Дефолтный wear range
+        if "min_float" not in params and self.wear_min is not None:
+            params["min_float"] = self.wear_min
+        if "max_float" not in params and self.wear_max is not None:
+            params["max_float"] = self.wear_max
+        return params
+
+    def _fetch_collection_with_filters(self):
+        """API запрос collection с текущими фильтрами."""
+        self._collection_cursor = None
+        self._collection_request_id += 1
+        req_id = self._collection_request_id
+        params = self._build_collection_params()
+        pool = QThreadPool.globalInstance()
+        w = ApiWorker(get_item_listings, self.api_key, None, **params)
+        w.signals.result.connect(
+            lambda data, rid=req_id: self._on_collection_filter_result(data, rid))
+        w.signals.error.connect(self._on_collection_load_error)
+        pool.start(w)
+
+    def _on_collection_filter_result(self, data, req_id):
+        if req_id != self._collection_request_id:
+            return
+        self._on_collection_filter_loaded(data)
+
+    def _on_collection_filter_loaded(self, data):
+        if not data:
+            return
+        if isinstance(data, dict):
+            self._collection_cursor = data.get("cursor")
+            listings = data.get("data", [])
+        else:
+            listings = data if isinstance(data, list) else []
+            self._collection_cursor = None
+        self._collection_data = listings
+        self._populate_collection_table(listings)
+
+    def _on_collection_double_click(self, row, col):
+        if col == 2:  # Price column
+            item = self._collection_table.item(row, 2)
+            if isinstance(item, NumericItem):
+                self.price_selected.emit(item._sort_value)
+
+    # ══════════════════════════════════════════════════════════
     # BUY ORDERS
     # ══════════════════════════════════════════════════════════
 
@@ -1130,6 +1444,7 @@ class ItemInfoDialog(QDialog):
         self._period_buttons = []
         for label, days in [("30d", 30), ("90d", 90), ("180d", 180), ("All", 999)]:
             btn = QPushButton(label)
+            btn.setAutoDefault(False)
             btn.setFixedSize(38, 20)
             btn.setFont(QFont(Theme.FONT_FAMILY, 8))
             btn.setCheckable(True)
@@ -1189,6 +1504,8 @@ class ItemInfoDialog(QDialog):
             self._loading.setGeometry(self.rect())
         if hasattr(self, '_stats_btn'):
             self._position_settings_btn()
+        if hasattr(self, '_toggle_btn'):
+            self._position_toggle_btn()
 
     def closeEvent(self, event):
         self._settings.setValue("item_info_height", self.height())

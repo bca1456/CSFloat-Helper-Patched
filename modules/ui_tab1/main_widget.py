@@ -243,7 +243,7 @@ class Tab1(QWidget):
             return
 
         row = item.row()
-        menu = QMenu(self)
+        menu = QMenu(self.window())
         menu.setStyleSheet(Theme.menu_style())
 
         item_info_action = menu.addAction("Item Info")
@@ -273,6 +273,8 @@ class Tab1(QWidget):
             api_key=_col_text(COL_API_KEY),
             icon_url=_col_text(COL_ICON_URL),
             keychain_index=_col_text(COL_KEYCHAIN_INDEX),
+            collection=_col_text(COL_COLLECTION),
+            rarity=_col_text(COL_RARITY),
             parent=self.window(),
         )
         dlg.price_selected.connect(self._on_item_info_price)

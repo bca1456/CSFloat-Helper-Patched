@@ -272,12 +272,32 @@ def get_item_listings(api_key, def_index, paint_index=None, sticker_index=None,
                       keychain_index=None, cursor=None, paint_seed=None,
                       min_fade=None, max_fade=None, min_blue=None, max_blue=None,
                       min_keychain_pattern=None, max_keychain_pattern=None,
-                      sort_by=None):
+                      sort_by=None, collection=None, rarity=None):
     """Получает текущие листинги предмета."""
     def _get():
         params = {"type": "buy_now"}
 
-        if keychain_index:
+        if collection:
+            params["collection"] = collection
+            params["rarity"] = rarity
+            params["category"] = category
+            params["sort_by"] = sort_by or "lowest_price"
+            params["limit"] = limit
+            if min_float is not None:
+                params["min_float"] = min_float
+            if max_float is not None:
+                params["max_float"] = max_float
+            if paint_seed is not None:
+                params["paint_seed"] = paint_seed
+            if min_fade is not None:
+                params["min_fade"] = min_fade
+            if max_fade is not None:
+                params["max_fade"] = max_fade
+            if min_blue is not None:
+                params["min_blue"] = min_blue
+            if max_blue is not None:
+                params["max_blue"] = max_blue
+        elif keychain_index:
             params["keychain_index"] = keychain_index
             params["sort_by"] = sort_by or "lowest_price"
             params["limit"] = limit
