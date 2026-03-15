@@ -1,5 +1,6 @@
 # modules/ui_tab1/table_population.py
 
+import logging
 import os
 import re
 from PyQt6.QtWidgets import QTableWidgetItem
@@ -91,9 +92,19 @@ class TablePopulator:
 
         stall_dict = {}
         for st in (stall or []):
-            asset_id = st.get("item", {}).get("asset_id")
-            if asset_id:
-                stall_dict[asset_id] = st
+            item_obj = st.get("item") or {}
+            asset_id = (
+                item_obj.get("asset_id")
+                or item_obj.get("id")
+                or st.get("asset_id")
+                or st.get("id")
+            )
+            if asset_id is not None:
+                key = str(asset_id)
+                stall_dict[key] = st
+
+        matched = sum(1 for item in inventory if stall_dict.get(str(item.get("asset_id") or "")))
+        logging.debug("Table batch: inv=%s, stall_entries=%s, matched_on_sale=%s", len(inventory), len(stall_dict), matched)
 
         self._pending = [(item, stall_dict) for item in inventory]
         self._process_batch()

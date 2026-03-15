@@ -32,6 +32,53 @@ from .item_operations import ItemOperations
 from .delegates import PriceDelegate, IconDelegate
 
 
+def _stall_listings_to_inventory_items(stall_data, api_key):
+    """Если API вернул пустой инвентарь, строим минимальные «предметы» из stall для отображения строк в таблице."""
+    items = []
+    for st in stall_data or []:
+        obj = st.get("item") or st
+        asset_id = obj.get("asset_id") or obj.get("id")
+        if asset_id is None:
+            continue
+        item = {
+            "asset_id": str(asset_id),
+            "market_hash_name": obj.get("market_hash_name", "—"),
+            "rarity": obj.get("rarity", 0),
+            "float_value": obj.get("float_value"),
+            "paint_seed": obj.get("paint_seed"),
+            "wear_name": obj.get("wear_name", ""),
+            "collection": obj.get("collection", ""),
+            "stickers": obj.get("stickers", []),
+            "keychains": obj.get("keychains", []),
+            "api_key": api_key,
+        }
+        items.append(item)
+    return items
+
+
+def _steam_id_from_user(user_info):
+    """Извлекает Steam ID из ответа /me (несколько возможных ключей и перебор полей)."""
+    if not user_info:
+        return None
+    # Известные ключи API (в порядке приоритета)
+    for key in ("steam_id", "steamid", "steamid64", "steam_id_64", "id", "user_id", "userId"):
+        val = user_info.get(key)
+        if val is not None and val != "":
+            s = str(val).strip()
+            if s and (s.isdigit() or s.startswith("7656")):
+                return s
+    # Запас: любое поле со значением, похожим на Steam ID (длинное число или 7656...)
+    for key, val in user_info.items():
+        if val is None:
+            continue
+        s = str(val).strip()
+        if s.isdigit() and len(s) >= 10:
+            return s
+        if s.startswith("7656") and s[4:].isdigit():
+            return s
+    return None
+
+
 class Tab1(QWidget):
     apikey_changed = pyqtSignal(str)
 
@@ -108,9 +155,7 @@ class Tab1(QWidget):
         else:
             self.keep_online_worker.remove_api_key(api_key)
 
-        logging.info(f"Settings saved for {api_key[:8]}...")
-        logging.info(f"  Keep Online: {keep_online}")
-        logging.info(f"  Description: {description}")
+        logging.debug("Settings saved for %s... Keep Online: %s", api_key[:8], keep_online)
 
     def initUI(self):
         central_widget = QWidget(self)
@@ -319,6 +364,8 @@ class Tab1(QWidget):
         """Load data from API."""
         self.store.clear()
         self.store.stall_total_count = len(self.api_keys)
+        self._load_generation = getattr(self, "_load_generation", 0) + 1
+        self._pending_user_results = {}  # key_id(api_key) -> result (user_info, inventory и т.д.)
 
         self.inventory_table.setRowCount(0)
         self.inventory_table.setSortingEnabled(False)
@@ -329,19 +376,11 @@ class Tab1(QWidget):
         schema_worker.signals.error.connect(self.handle_schema_error)
         threadpool.start(schema_worker)
 
+        # Сначала ждём user+inventory по всем аккаунтам, затем запускаем stall по каждому с его инвентарём.
         for api_key in self.api_keys:
-            cached_steam_id = self.settings.value(
-                f"account_{key_id(api_key)}_steam_id", "", type=str)
-
-            if cached_steam_id:
-                worker = ApiWorker(self.fetch_all_data, api_key, cached_steam_id)
-                worker.signals.result.connect(self.handle_full_result)
-                worker.signals.error.connect(self.handle_api_error)
-            else:
-                worker = ApiWorker(self.fetch_user_and_inventory, api_key)
-                worker.signals.result.connect(self.handle_api_result)
-                worker.signals.error.connect(self.handle_api_error)
-
+            worker = ApiWorker(self.fetch_user_and_inventory, api_key)
+            worker.signals.result.connect(self.handle_api_result)
+            worker.signals.error.connect(self.handle_api_error)
             threadpool.start(worker)
 
     def fetch_schema(self):
@@ -413,8 +452,11 @@ class Tab1(QWidget):
         self.store.add_user_result(api_key, user_info, inventory)
         self.store.add_stall_result(stall_data)
 
+        kid = key_id(api_key)[:8] if api_key else "?"
+        logging.debug("Stall (full): account %s, stall_items=%s, inv_count=%s", kid, len(stall_data), len(inventory) if inventory else 0)
+
         # Обновляем кэш steam_id на случай смены аккаунта
-        steam_id = user_info.get("steam_id") if user_info else None
+        steam_id = _steam_id_from_user(user_info)
         if steam_id:
             self.settings.setValue(f"account_{key_id(api_key)}_steam_id", steam_id)
 
@@ -424,31 +466,66 @@ class Tab1(QWidget):
 
     @pyqtSlot(object)
     def handle_api_result(self, result):
-        """Handle user info and inventory result (fallback, no cached steam_id)."""
+        """Собираем user+inventory по аккаунтам; когда все есть — добавляем в store и запускаем stall по каждому."""
         api_key = result.get("api_key")
-        user_info = result.get("user_info")
-        inventory = result.get("inventory")
-
-        self.store.add_user_result(api_key, user_info, inventory)
-
-        steam_id = user_info.get("steam_id") if user_info else None
-        if steam_id:
-            self.settings.setValue(f"account_{key_id(api_key)}_steam_id", steam_id)
-
-        worker = ApiWorker(self.fetch_stall_data, api_key, steam_id)
-        worker.signals.result.connect(self.handle_stall_result)
-        worker.signals.error.connect(self.handle_stall_error)
-        QThreadPool.globalInstance().start(worker)
+        kid = key_id(api_key)
+        pending = getattr(self, "_pending_user_results", None)
+        if pending is None:
+            return
+        pending[kid] = result
+        if len(pending) != len(self.api_keys):
+            return
+        self._start_all_stall_workers()
 
     @pyqtSlot(tuple)
     def handle_api_error(self, error):
-        """Handle API error."""
+        """Handle API error одного из user+inventory; добавляем заглушку и проверяем, можно ли запускать stall."""
         e, tb = error
         logging.error(f"API Error: {e}\n{tb}")
         critical(self, "API Error", f"An error occurred while fetching data:\n{e}")
 
+        # Чтобы не блокировать запуск stall: помечаем аккаунт как «получен» с пустым результатом.
+        # Какой именно аккаунт упал — неизвестно из сигнала, поэтому добавляем заглушку только если
+        # в pending ещё не хватает одного (иначе просто завершаем).
+        pending = getattr(self, "_pending_user_results", None)
+        if pending is not None and len(pending) < len(self.api_keys):
+            for ak in self.api_keys:
+                if key_id(ak) not in pending:
+                    pending[key_id(ak)] = {"api_key": ak, "user_info": None, "inventory": []}
+                    break
+            if len(pending) == len(self.api_keys):
+                self._start_all_stall_workers()
+                return
         self.store.add_stall_result([])
         self._check_loading_complete()
+
+    def _start_all_stall_workers(self):
+        """Добавляет все накопленные user+inventory в store и запускает stall-воркер для каждого со своим инвентарём."""
+        pending = getattr(self, "_pending_user_results", None)
+        if not pending or len(pending) != len(self.api_keys):
+            return
+        current_gen = getattr(self, "_load_generation", 0)
+        for ak in self.api_keys:
+            res = pending.get(key_id(ak))
+            if not res:
+                continue
+            user_info = res.get("user_info")
+            inventory = res.get("inventory") or []
+            self.store.add_user_result(ak, user_info, inventory)
+
+            steam_id = _steam_id_from_user(user_info)
+            kid8 = key_id(ak)[:8]
+            if steam_id:
+                self.settings.setValue(f"account_{key_id(ak)}_steam_id", steam_id)
+                logging.debug("Stall (async): account %s, steam_id=%s***, inv=%s", kid8, str(steam_id)[:8], len(inventory))
+            else:
+                logging.warning("No steam_id for account %s; keys=%s", kid8, list(user_info.keys()) if user_info else [])
+
+            account_inventory = list(inventory)
+            worker = ApiWorker(self._fetch_stall_with_inventory, ak, steam_id, account_inventory)
+            worker.signals.result.connect(lambda r, g=current_gen: self._handle_stall_result_with_gen(r, g))
+            worker.signals.error.connect(lambda err, a=ak, inv=account_inventory: self.handle_stall_error(err, a, inv))
+            QThreadPool.globalInstance().start(worker)
 
     def fetch_stall_data(self, api_key, steam_id):
         """Fetch stall data."""
@@ -458,24 +535,47 @@ class Tab1(QWidget):
         stall_data = get_stall_data(api_key, steam_id)
         return {"api_key": api_key, "stall": stall_data or []}
 
-    @pyqtSlot(object)
-    def handle_stall_result(self, result):
-        """Handle stall data result."""
+    def _fetch_stall_with_inventory(self, api_key, steam_id, account_inventory):
+        """Загружает stall и возвращает результат вместе с переданным инвентарём (для однозначного сопоставления)."""
+        result = self.fetch_stall_data(api_key, steam_id)
+        result["inventory"] = account_inventory
+        return result
+
+    def _handle_stall_result_with_gen(self, result, generation):
+        """Обработка stall: инвентарь берём из результата воркера (передан при старте)."""
         api_key = result.get("api_key")
         stall_data = result.get("stall", [])
+        account_inventory = result.get("inventory")  # передан в _fetch_stall_with_inventory
+
+        kid = key_id(api_key)[:8] if api_key else "?"
+        logging.debug("Stall (async done): account %s, stall_items=%s", kid, len(stall_data))
+
+        if generation != getattr(self, "_load_generation", 0):
+            logging.debug("Stall result ignored (stale generation %s)", generation)
+            self._update_status_label()
+            self._check_loading_complete()
+            return
+
         self.store.add_stall_result(stall_data)
 
-        account_inventory = [item for item in self.store.inventory if item.get("api_key") == api_key]
+        if account_inventory is None:
+            account_inventory = [item for item in self.store.inventory if item.get("api_key") == api_key]
+        # Если API вернул пустой инвентарь для этого ключа — строим строки из stall (все они «на продаже»).
+        if not account_inventory and stall_data:
+            account_inventory = _stall_listings_to_inventory_items(stall_data, api_key)
+            logging.debug("Account %s: inv=0 from API, built %s rows from stall", kid, len(account_inventory))
         self.populator.append(account_inventory, stall_data)
         self._update_status_label()
 
-    @pyqtSlot(tuple)
-    def handle_stall_error(self, error):
-        """Handle stall data error."""
+    def handle_stall_error(self, error, api_key=None, inventory=None):
+        """Handle stall data error; без stall всё равно добавляем строки инвентаря."""
         e, tb = error
-        logging.error(f"Stall Data Error: {e}\n{tb}")
+        logging.error("Stall Data Error for account %s: %s", (key_id(api_key)[:8] if api_key else "?"), e)
 
         self.store.add_stall_result([])
+        if api_key:
+            account_inventory = inventory if inventory is not None else [item for item in self.store.inventory if item.get("api_key") == api_key]
+            self.populator.append(account_inventory, [])
         self._check_loading_complete()
 
     def _check_loading_complete(self):

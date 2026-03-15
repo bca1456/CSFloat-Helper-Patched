@@ -395,11 +395,13 @@ class ItemOperations:
                 warning(pw, "Error", "Failed to list items. Empty response from server.")
                 return
 
-            items_by_asset = {item["asset_id"]: item for item in items}
+            items_by_asset = {str(item["asset_id"]): item for item in items}
 
             for listing in listings:
                 listing_id = listing.get("id", "")
                 asset_id = listing.get("item", {}).get("asset_id", "")
+                if asset_id is not None:
+                    asset_id = str(asset_id)
                 if listing_id and asset_id in items_by_asset:
                     item = items_by_asset[asset_id]
                     successful.append((item["name"], item["price"] / 100))
@@ -821,11 +823,13 @@ class ItemOperations:
                 self.table.setSortingEnabled(True)
                 return
 
-            items_by_asset = {it["asset_id"]: it for it in items}
+            items_by_asset = {str(it["asset_id"]): it for it in items}
 
             for listing in listings:
                 listing_id = listing.get("id")
                 asset_id = listing.get("item", {}).get("asset_id", "")
+                if asset_id is not None:
+                    asset_id = str(asset_id)
                 if listing_id and asset_id in items_by_asset:
                     it = items_by_asset[asset_id]
                     self._update_item_as_sold(asset_id, it["price_cents"], listing_id)

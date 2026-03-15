@@ -1,153 +1,73 @@
-# CSFloat Helper
+![Screenshot of CSFloat Helper](screenshot/Screenshot_main.png)
+## Installation
 
-![Screenshot](screenshot/Screenshot_main.png)
+### Requirements
 
-Desktop application for convenient inventory management on CSFloat marketplace (CS2).
+-   **Python 3.7 or higher**: Make sure you have Python version 3.7 or higher installed. You can download Python from the [official website](https://www.python.org/).
+
+### Installing Python
+
+1.  Download and install Python from the [official website](https://www.python.org/downloads/).
+2.  Ensure that Python and `pip` (Python package manager) are added to your system path.
+
+### Installing Dependencies
+
+1.  Ensure you are in the root directory of the project where the `requirements.txt` file is located.
+    
+2.  Install the dependencies:
+    
+    `pip install -r requirements.txt`
+    
+
+### Configuration Setup
+
+1.  Modify the `config.json` file in the root directory of the project with the following content:
+    
+    `{ "api_keys": [ "YOUR_API_KEY", "YOUR_API_KEY" ] }`
+    
+2.  Replace `"YOUR_API_KEY"` with your actual API key, and you can use multiple keys.
+    
+
+## Running the Script
+
+To run the program, use the following command:
+
+`python csfloat_helper.py`
+
+If you prefer to use a bat file for quick launch on Windows, you can use the run_csfloat_helper.bat file located in the project root:
+
+`./run_csfloat_helper.bat`
 
 ## Features
 
-### Listing Management
-- **Bulk Listing** — list multiple items for sale at once
-- **Delisting** — quickly remove items from sale
-- **Relisting** — relist items back to marketplace
-- **Price Changes** — three methods:
-  - Set new price value
-  - Change price by fixed amount (+/- fixed sum)
-  - Change price by percentage (+/- %)
+![Screenshot of CSFloat Helper](screenshot/Screenshot_user_info.png)
+### User Interface
 
-### Personalization
-- **Custom Note per Account** — configure individual listing note for each API key
-- **Multi-account Support** — work with multiple accounts simultaneously
+-   **Graphical Interface**: The application provides a user-friendly graphical interface for managing the CSFloat inventory.
+-   **Filters**: Ability to filter items by name, stickers, and float value.
 
-### Filtering and Display
-- Filters by item name, collection, rarity, wear condition
-- Filters by stickers and float value
-- Display days on sale for each item
-- Information about price, stickers, keychains
-- Status bar showing item count, listings on sale, and selected items
+### Data Loading
 
-### Additional Features
-- View user information (Steam ID, balance, sales statistics)
-- Keep Online — automatically maintain online status
-- Light/Dark theme switching
-- Image caching for fast loading
+-   **Inventory**: The script loads data about the inventory and items listed for sale via the CSFloat API.
 
-## Installation and Setup
+### Data Display
 
-### Requirements
-- Python 3.7 or higher
-- Windows / Linux / macOS
+-   **Inventory Table**: The application displays the user's inventory in a table with information about the item name, stickers, float value, days listed for sale, price.
 
-### Quick Start
+### Data Filtering
 
-1. Clone the repository or download the archive
+-   **Dynamic Filtering**: Ability to filter the inventory by item name, sticker, and float value.
 
-2. **Rename** `config.example.json` to `config.json`:
-```bash
-# Linux/macOS
-mv config.example.json config.json
+### Item Management
 
-# Windows
-ren config.example.json config.json
-```
+-   **Item Sale**: Listing selected items for sale with a specified price.
+-   **Remove from Sale**: Removing selected items from sale.
+-   **Price Change**: Changing the price of items that are already listed for sale.
 
-3. **Open** `config.json` and insert your CSFloat API key:
-```json
-{
-    "api_keys": [
-        "YOUR_CSFLOAT_API_KEY"
-    ]
-}
-```
+### User Information
 
-Replace `YOUR_CSFLOAT_API_KEY` with your actual API key.
+-   **Displaying Information**: The application allows you to obtain and display information about the user, such as Steam ID, username, balance, total number of sales and purchases, and other data.
 
-> **How to get CSFloat API key:**
-> 1. Go to [CSFloat](https://csfloat.com/)
-> 2. Log in to your account
-> 3. Open profile settings → API
-> 4. Create a new API key
+## Contributing to the Project
 
-**Multiple accounts:** To add more accounts, simply add more keys to the array:
-```json
-{
-    "api_keys": [
-        "first_account_api_key",
-        "second_account_api_key",
-        "third_account_api_key"
-    ]
-}
-```
-
-### Running
-
-#### Windows (Recommended):
-Simply run the launcher - it will automatically install dependencies if needed:
-```bash
-run_csfloat_helper.bat
-```
-
-#### Linux/macOS or Manual Launch:
-```bash
-pip install -r requirements.txt
-python csfloat_helper.py
-```
-
-## Usage
-
-1. **Select account** from dropdown (if using multiple API keys)
-2. **Load inventory** — click "Load Inventory" button
-3. **Apply filters** — use search fields and filters to find needed items
-4. **Select items** — check the items you need in the table
-5. **Execute operation**:
-   - Sell — list items for sale
-   - Delist — remove items from sale
-   - Change Price — modify price of listed items
-   - Swap — swap prices between two items
-
-## Security
-
-- API keys are stored locally and **hashed** in Windows registry (SHA-256)
-- **Never share your API key with third parties**
-
-## Technologies
-
-- **Python 3.7+**
-- **PyQt6** — graphical interface
-- **urllib** — HTTP requests to CSFloat API
-- **orjson** — fast JSON parsing
-- **Threading** — asynchronous operations
-
-## Project Structure
-
-```
-CSFloat-Helper-main/
-├── csfloat_helper.py           # Entry point
-├── config.json                 # API keys (create from config.example.json)
-├── requirements.txt            # Dependencies
-├── run_csfloat_helper.bat     # Quick launch (Windows)
-│
-├── modules/                    # Core modules
-│   ├── api.py                 # CSFloat API integration
-│   ├── ui.py                  # Main application window
-│   ├── workers.py             # Background threads
-│   ├── theme.py               # Theme system
-│   └── ...
-│
-├── utils/                      # Resources (icons, fonts)
-└── cache/                      # Image cache
-```
-
-## Contributing
-
-If you have suggestions for improvements or found a bug:
-1. Create an Issue on GitHub
-2. Submit a Pull Request with description of changes
-
-## License
-
-MIT License
-
----
-
-**CSFloat Helper** — fast and convenient CS2 inventory management.
+If you have suggestions for improvements or find bugs, please create a Pull Request or Issue on GitHub.

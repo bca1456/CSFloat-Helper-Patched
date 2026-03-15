@@ -1,11 +1,11 @@
 @echo off
 setlocal
 
-title CSFloat Helper - Launcher
+title CSFloat Helper - Patched
 cls
 
 echo ========================================
-echo   CSFLOAT HELPER v2.0 by Gradinaz
+echo   CSFLOAT HELPER - PATCHED
 echo ========================================
 echo.
 
@@ -66,7 +66,7 @@ if %MISSING%==1 (
 )
 
 REM Step 3: Launch
-echo [3/3] Launching CSFloat Helper...
+echo [3/3] Launching CSFloat Helper - Patched...
 timeout /t 1 /nobreak >nul
 
 start "" pythonw.exe csfloat_helper.py

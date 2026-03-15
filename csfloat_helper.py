@@ -1,12 +1,30 @@
 import sys
 import os
+import logging
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon, QFontDatabase, QFont
 from modules.ui import SteamInventoryApp
 from modules.utils import load_config, init_callback_receiver
 
 
+def _setup_logging():
+    """Пишет лог в файл (при запуске через pythonw консоль недоступна)."""
+    log_dir = os.path.dirname(os.path.abspath(__file__))
+    log_file = os.path.join(log_dir, "csfloat_helper.log")
+    try:
+        fh = logging.FileHandler(log_file, encoding="utf-8")
+        fh.setLevel(logging.DEBUG)
+        fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+        fh.setFormatter(fmt)
+        root = logging.getLogger()
+        root.addHandler(fh)
+        root.setLevel(logging.DEBUG)
+    except Exception:
+        pass
+
+
 def main():
+    _setup_logging()
     if sys.platform == "win32":
         import ctypes
         myappid = 'csfloat.helper.app.2'
