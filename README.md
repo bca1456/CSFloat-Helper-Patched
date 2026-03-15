@@ -1,4 +1,9 @@
+# CSFloat Helper - Patched
+
+Based on CSFloat Helper v2.0 by Gradinaz.
+
 ![Screenshot of CSFloat Helper](screenshot/Screenshot_main.png)
+
 ## Installation
 
 ### Requirements

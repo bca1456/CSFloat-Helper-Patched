@@ -5,7 +5,7 @@ title CSFloat Helper - Patched
 cls
 
 echo ========================================
-echo   CSFLOAT HELPER - PATCHED
+echo   CSFLOAT HELPER - PATCHED v2.0 by Gradinaz
 echo ========================================
 echo.
 

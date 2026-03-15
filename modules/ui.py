@@ -30,7 +30,7 @@ class SteamInventoryApp(QMainWindow):
 
         self.setStyleSheet(Theme.global_style())
 
-        self.setWindowTitle("CSFloat Helper - Patched")
+        self.setWindowTitle("CSFloat Helper - Patched v2.0 by Gradinaz")
 
         self.tab1 = Tab1(self.api_keys, self.iconpath, parent=self)
         self.setCentralWidget(self.tab1)
