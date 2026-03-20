@@ -878,7 +878,7 @@ class ItemInfoDialog(QDialog):
         self.listings_table.verticalHeader().setDefaultSectionSize(28)
         self.listings_table.verticalHeader().setVisible(False)
         self.listings_table.setAlternatingRowColors(True)
-        self.listings_table.setSortingEnabled(True)
+        self.listings_table.setSortingEnabled(False)
 
         h = self.listings_table.horizontalHeader()
         h.setStretchLastSection(False)
@@ -927,9 +927,7 @@ class ItemInfoDialog(QDialog):
 
         if new_items:
             self._listings_data.extend(new_items)
-            self.listings_table.setSortingEnabled(False)
             self._append_listings_rows(new_items)
-            self.listings_table.setSortingEnabled(True)
 
     def _on_load_more_error(self, error):
         self._is_loading_more = False
@@ -940,13 +938,8 @@ class ItemInfoDialog(QDialog):
         return self._filter_types[self._current_filter_idx]["name"]
 
     def _populate_listings_table(self, listings):
-        self.listings_table.setSortingEnabled(False)
         self.listings_table.setRowCount(0)
         self._append_listings_rows(listings)
-        self.listings_table.setSortingEnabled(True)
-        # Сортировка по колонке Price
-        price_col = self._get_price_col()
-        self.listings_table.sortItems(price_col, Qt.SortOrder.AscendingOrder)
 
     def _get_price_col(self):
         if not self.has_params:
@@ -1157,7 +1150,7 @@ class ItemInfoDialog(QDialog):
         self._collection_table.verticalHeader().setDefaultSectionSize(28)
         self._collection_table.verticalHeader().setVisible(False)
         self._collection_table.setAlternatingRowColors(True)
-        self._collection_table.setSortingEnabled(True)
+        self._collection_table.setSortingEnabled(False)
 
         h = self._collection_table.horizontalHeader()
         h.setStretchLastSection(False)
@@ -1201,11 +1194,8 @@ class ItemInfoDialog(QDialog):
         self._populate_collection_table(listings)
 
     def _populate_collection_table(self, listings):
-        self._collection_table.setSortingEnabled(False)
         self._collection_table.setRowCount(0)
         self._append_collection_rows(listings)
-        self._collection_table.setSortingEnabled(True)
-        self._collection_table.sortByColumn(2, Qt.SortOrder.AscendingOrder)
 
     def _append_collection_rows(self, listings):
         for entry in listings:
@@ -1276,9 +1266,7 @@ class ItemInfoDialog(QDialog):
             self._collection_cursor = None
         if new_items:
             self._collection_data.extend(new_items)
-            self._collection_table.setSortingEnabled(False)
             self._append_collection_rows(new_items)
-            self._collection_table.setSortingEnabled(True)
 
     def _on_collection_load_error(self, error):
         self._is_loading_more_collection = False
