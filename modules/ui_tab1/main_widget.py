@@ -56,6 +56,20 @@ def _stall_listings_to_inventory_items(stall_data, api_key):
     return items
 
 
+def _merge_missing_stall_items(account_inventory, stall_data, api_key):
+    """Добавляет в инвентарь предметы из stall, которых нет в account_inventory."""
+    inventory = list(account_inventory or [])
+    present_asset_ids = {str(it.get("asset_id", "")) for it in inventory if it.get("asset_id") is not None}
+
+    for st_item in _stall_listings_to_inventory_items(stall_data, api_key):
+        aid = str(st_item.get("asset_id", ""))
+        if aid and aid not in present_asset_ids:
+            inventory.append(st_item)
+            present_asset_ids.add(aid)
+
+    return inventory
+
+
 def _steam_id_from_user(user_info):
     """Извлекает Steam ID из ответа /me (несколько возможных ключей и перебор полей)."""
     if not user_info:
@@ -245,6 +259,28 @@ class Tab1(QWidget):
         if hasattr(self, 'status_label'):
             self.status_label.move(20, self.height() - 26)
 
+    def _reset_filters_before_load(self):
+        """Сбрасывает фильтры перед загрузкой, чтобы не скрывать новые/добавленные строки."""
+        self.name_filter.clear()
+        self.sticker_filter.clear()
+        self.float_min_filter.clear()
+        self.float_max_filter.clear()
+        self.collection_edit.clear()
+
+        self.filter_ctrl.selected_conditions.clear()
+        self.filter_ctrl.selected_rarities.clear()
+        self.filter_ctrl.stattrack_filter = False
+        self.filter_ctrl.souvenir_filter = False
+
+        for btn in self.rarity_buttons:
+            btn.blockSignals(True)
+            btn.setChecked(False)
+            btn.blockSignals(False)
+        for btn in self.condition_buttons:
+            btn.blockSignals(True)
+            btn.setChecked(False)
+            btn.blockSignals(False)
+
     def _status_label_style(self):
         return (
             f"color: {Theme.TEXT_SECONDARY}; "
@@ -362,6 +398,7 @@ class Tab1(QWidget):
 
     def load_data(self, threadpool):
         """Load data from API."""
+        self._reset_filters_before_load()
         self.store.clear()
         self.store.stall_total_count = len(self.api_keys)
         self._load_generation = getattr(self, "_load_generation", 0) + 1
@@ -560,10 +597,15 @@ class Tab1(QWidget):
 
         if account_inventory is None:
             account_inventory = [item for item in self.store.inventory if item.get("api_key") == api_key]
-        # Если API вернул пустой инвентарь для этого ключа — строим строки из stall (все они «на продаже»).
-        if not account_inventory and stall_data:
-            account_inventory = _stall_listings_to_inventory_items(stall_data, api_key)
-            logging.debug("Account %s: inv=0 from API, built %s rows from stall", kid, len(account_inventory))
+
+        # Если часть предметов есть в stall, но отсутствует в API inventory — добавляем их в таблицу из stall.
+        # Это покрывает кейс «в UI CSFloat предмет листится, а /me/inventory его ещё не отдаёт».
+        before_count = len(account_inventory or [])
+        account_inventory = _merge_missing_stall_items(account_inventory, stall_data, api_key)
+        added_from_stall = len(account_inventory) - before_count
+        if added_from_stall > 0:
+            logging.debug("Account %s: added %s stall-only rows to table", kid, added_from_stall)
+
         self.populator.append(account_inventory, stall_data)
         self._update_status_label()
 

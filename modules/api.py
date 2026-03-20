@@ -26,7 +26,7 @@ except ImportError:
 
 # API endpoints
 API_USER_INFO = "https://csfloat.com/api/v1/me"
-API_INVENTORY = "https://csfloat.com/api/v1/me/inventory"
+API_INVENTORY = "https://csfloat.com/api/v1/me/inventory?limit=100"
 API_STALL = "https://csfloat.com/api/v1/users/{steam_id}/stall?limit=999"
 LISTINGS_URL = "https://csfloat.com/api/v1/listings"
 BULK_LIST_URL = "https://csfloat.com/api/v1/listings/bulk-list"
@@ -114,14 +114,91 @@ def get_inventory_data(api_key: str):
     """Get inventory data with automatic retry on errors."""
     def _get():
         headers = {"Authorization": api_key}
+        all_items = []
+        seen_asset_ids = set()
+        limit = 100
+
+        def _append_unique(items):
+            added = 0
+            for item in (items or []):
+                aid = str(item.get("asset_id", ""))
+                if aid and aid in seen_asset_ids:
+                    continue
+                if aid:
+                    seen_asset_ids.add(aid)
+                all_items.append(item)
+                added += 1
+            return added
+
+        # 1) Base request
         req = urllib.request.Request(API_INVENTORY, headers=headers)
         data = _request_json(req)
-        if isinstance(data, dict) and "items" in data:
-            return _strip_inventory(data["items"])
-        if isinstance(data, list):
-            return _strip_inventory(data)
-        print("Unexpected response format.")
-        return []
+        if isinstance(data, dict):
+            page_items = data.get("items") or data.get("data") or []
+            next_cursor = data.get("cursor") or data.get("next_cursor")
+        elif isinstance(data, list):
+            page_items = data
+            next_cursor = None
+        else:
+            print("Unexpected response format.")
+            return []
+
+        _append_unique(page_items)
+
+        # 2) Cursor pagination
+        cursor_guard = set()
+        while next_cursor and next_cursor not in cursor_guard:
+            cursor_guard.add(next_cursor)
+            url = f"{API_INVENTORY}&cursor={next_cursor}"
+            req = urllib.request.Request(url, headers=headers)
+            page = _request_json(req)
+            if isinstance(page, dict):
+                page_items = page.get("items") or page.get("data") or []
+                next_cursor = page.get("cursor") or page.get("next_cursor")
+            elif isinstance(page, list):
+                page_items = page
+                next_cursor = None
+            else:
+                break
+            if not page_items:
+                break
+            _append_unique(page_items)
+
+        # 3) Fallback pagination by offset/page (some backends do not return cursor)
+        #    Stop when page is empty or nothing new is added.
+        for i in range(1, 31):
+            offset_url = f"{API_INVENTORY}&offset={i * limit}&limit={limit}"
+            req = urllib.request.Request(offset_url, headers=headers)
+            page = _request_json(req)
+            if isinstance(page, dict):
+                page_items = page.get("items") or page.get("data") or []
+            elif isinstance(page, list):
+                page_items = page
+            else:
+                page_items = []
+            if not page_items:
+                break
+            added = _append_unique(page_items)
+            if added == 0:
+                break
+
+        for p in range(2, 31):
+            page_url = f"{API_INVENTORY}&page={p}&limit={limit}"
+            req = urllib.request.Request(page_url, headers=headers)
+            page = _request_json(req)
+            if isinstance(page, dict):
+                page_items = page.get("items") or page.get("data") or []
+            elif isinstance(page, list):
+                page_items = page
+            else:
+                page_items = []
+            if not page_items:
+                break
+            added = _append_unique(page_items)
+            if added == 0:
+                break
+
+        return _strip_inventory(all_items)
 
     try:
         return _retry_request(_get)
