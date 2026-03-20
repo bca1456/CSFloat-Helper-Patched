@@ -255,17 +255,6 @@ def get_schema():
 # Item Info API — listings, sales, buy orders, graph
 # ═══════════════════════════════════════════════════════════
 
-def _debug_save(name, data):
-    """Сохраняет сырой ответ API в cache/debug_*.json."""
-    try:
-        cache_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "cache")
-        os.makedirs(cache_dir, exist_ok=True)
-        path = os.path.join(cache_dir, f"debug_{name}.json")
-        with open(path, "wb") as f:
-            f.write(_dumps(data))
-    except Exception as e:
-        logging.debug(f"Debug save failed: {e}")
-
 
 def get_item_listings(api_key, def_index, paint_index=None, sticker_index=None,
                       category=1, min_float=None, max_float=None, limit=50,
@@ -343,7 +332,6 @@ def get_item_listings(api_key, def_index, paint_index=None, sticker_index=None,
         headers = {"Authorization": api_key}
         req = urllib.request.Request(url, headers=headers)
         data = _request_json(req)
-        _debug_save("listings", data)
         return data
 
     try:
@@ -361,7 +349,6 @@ def get_item_sales(api_key, market_hash_name):
         headers = {"Authorization": api_key}
         req = urllib.request.Request(url, headers=headers)
         data = _request_json(req)
-        _debug_save("sales", data)
         return data
 
     try:
@@ -390,7 +377,6 @@ def get_item_buy_orders(api_key, inspect_link=None, market_hash_name=None, limit
             )
 
         data = _request_json(req)
-        _debug_save("buy_orders", data)
         return data
 
     try:
@@ -408,7 +394,6 @@ def get_item_graph(api_key, market_hash_name):
         headers = {"Authorization": api_key}
         req = urllib.request.Request(url, headers=headers)
         data = _request_json(req)
-        _debug_save("graph", data)
         return data
 
     try:

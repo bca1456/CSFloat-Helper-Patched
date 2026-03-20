@@ -26,6 +26,14 @@ Desktop application for convenient inventory management on CSFloat marketplace (
 - Information about price, stickers, keychains
 - Status bar showing item count, listings on sale, and selected items
 
+### Item Info
+- Detailed item dialog with current listings, recent sales, buy orders and price history chart
+- Float, seed, sticker filters with scroll pagination
+- Price statistics with scoring indicators (7d / 30d / 90d)
+- Collection comparison panel
+
+![Item Info](screenshot/Screenshot_Item_Info.png)
+
 ### Additional Features
 - View user information (Steam ID, balance, sales statistics)
 - Keep Online — automatically maintain online status
