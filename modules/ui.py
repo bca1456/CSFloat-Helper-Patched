@@ -116,4 +116,5 @@ class SteamInventoryApp(QMainWindow):
         self.settings.setValue("window_y", self.y())
         self.settings.sync()
 
+        QThreadPool.globalInstance().waitForDone(3000)
         event.accept()

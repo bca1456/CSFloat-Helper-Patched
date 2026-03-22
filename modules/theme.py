@@ -2,25 +2,25 @@
 
 
 _LIGHT_PALETTE = {
-    "PRIMARY": "#4147D5",
-    "PRIMARY_HOVER": "#3137B5",
-    "PRIMARY_PRESSED": "#2127A5",
-    "PRIMARY_LIGHT": "rgba(65, 71, 213, 0.1)",
-    "PRIMARY_MEDIUM": "rgba(65, 71, 213, 0.9)",
+    "PRIMARY": "#5B5FC7",
+    "PRIMARY_HOVER": "#4B4FB7",
+    "PRIMARY_PRESSED": "#3F42A3",
+    "PRIMARY_LIGHT": "rgba(91, 95, 199, 0.08)",
+    "PRIMARY_MEDIUM": "rgba(91, 95, 199, 0.88)",
     "BG_WHITE": "#FFFFFF",
-    "BG_LIGHT": "#F5F9FC",
-    "BG_HOVER": "#EBF3FA",
-    "BG_SELECTION": "#E3F0FF",
-    "BORDER_INPUT": "#D1B3FF",
-    "BORDER_LIGHT": "#C5D9F1",
-    "BORDER_GRID": "#E6E0F2",
-    "TEXT_PRIMARY": "#000000",
-    "TEXT_SECONDARY": "#666666",
-    "TEXT_PLACEHOLDER": "#A0A0A0",
-    "TEXT_WHITE": "white",
-    "HOVER_GRAY": "#E0E0E0",
-    "ERROR": "#FF4444",
-    "SHADOW_RGB": (65, 71, 213),
+    "BG_LIGHT": "#F7F6FB",
+    "BG_HOVER": "#EFEDF7",
+    "BG_SELECTION": "#E6E3F3",
+    "BORDER_INPUT": "#C8C3DE",
+    "BORDER_LIGHT": "#D5D1E6",
+    "BORDER_GRID": "#E5E2F0",
+    "TEXT_PRIMARY": "#1E1E2E",
+    "TEXT_SECONDARY": "#6E6E82",
+    "TEXT_PLACEHOLDER": "#9E9EB2",
+    "TEXT_WHITE": "#FFFFFF",
+    "HOVER_GRAY": "#E5E3EE",
+    "ERROR": "#E53E3E",
+    "SHADOW_RGB": (91, 95, 199),
 }
 
 _DARK_PALETTE = {
@@ -400,6 +400,9 @@ class Theme:
             QTableView {{
                 background-color: {cls.BG_WHITE};
             }}
+            QTableWidget QHeaderView {{
+                background-color: {cls.BG_WHITE};
+            }}
             QTableWidget::item {{ padding-left: 5px; }}
             QTableWidget::item:selected {{ background-color: {cls.BG_SELECTION}; }}
             QTableWidget::item:selected:!active {{ background-color: {cls.BG_SELECTION}; }}
@@ -570,4 +573,28 @@ class Theme:
                 stop:0.5 rgba(189, 189, 189, 1),
                 stop:1 rgba(189, 189, 189, 0)
             );
+        """
+
+    @classmethod
+    def menu_style(cls):
+        return f"""
+            QMenu {{
+                background-color: {cls.BG_WHITE};
+                border: 1px solid {cls.BORDER_GRID};
+                padding: 2px 0;
+            }}
+            QMenu::item {{
+                padding: 4px 16px;
+                color: {cls.TEXT_PRIMARY};
+                font-family: '{cls.FONT_FAMILY}';
+                font-size: {cls.FONT_SIZE_SMALL}pt;
+            }}
+            QMenu::item:selected {{
+                background-color: {cls.HOVER_GRAY};
+            }}
+            QMenu::separator {{
+                height: 1px;
+                background: {cls.BORDER_GRID};
+                margin: 2px 6px;
+            }}
         """

@@ -1,8 +1,11 @@
 # modules/api.py
 
 import gzip
+import logging
+import os
 import urllib.request
 import urllib.error
+import urllib.parse
 import time
 
 try:
@@ -33,6 +36,10 @@ BULK_LIST_URL = "https://csfloat.com/api/v1/listings/bulk-list"
 BULK_DELIST_URL = "https://csfloat.com/api/v1/listings/bulk-delist"
 BULK_MODIFY_URL = "https://csfloat.com/api/v1/listings/bulk-modify"
 API_SCHEMA = "https://csfloat.com/api/v1/schema"
+API_HISTORY_SALES = "https://csfloat.com/api/v1/history/{market_hash_name}/sales"
+API_HISTORY_GRAPH = "https://csfloat.com/api/v1/history/{market_hash_name}/graph"
+API_BUY_ORDERS_ITEM = "https://csfloat.com/api/v1/buy-orders/item"
+API_BUY_ORDERS_SIMILAR = "https://csfloat.com/api/v1/buy-orders/similar-orders"
 
 # Retry settings
 MAX_RETRIES = 3
@@ -102,6 +109,8 @@ def get_user_info(api_key: str):
 _INVENTORY_FIELDS = {
     "asset_id", "market_hash_name", "rarity", "float_value",
     "paint_seed", "wear_name", "collection", "stickers", "keychains",
+    "def_index", "paint_index", "sticker_index", "inspect_link", "icon_url",
+    "keychain_index", "keychain_pattern",
 }
 
 
@@ -316,4 +325,156 @@ def get_schema():
         return None
     except urllib.error.URLError as e:
         print(f"Other error occurred: {e}")
+        return None
+
+
+# ═══════════════════════════════════════════════════════════
+# Item Info API — listings, sales, buy orders, graph
+# ═══════════════════════════════════════════════════════════
+
+
+def get_item_listings(api_key, def_index, paint_index=None, sticker_index=None,
+                      category=1, min_float=None, max_float=None, limit=50,
+                      keychain_index=None, cursor=None, paint_seed=None,
+                      min_fade=None, max_fade=None, min_blue=None, max_blue=None,
+                      min_keychain_pattern=None, max_keychain_pattern=None,
+                      sort_by=None, collection=None, rarity=None):
+    """Получает текущие листинги предмета."""
+    def _get():
+        params = {"type": "buy_now"}
+
+        if collection:
+            params["collection"] = collection
+            params["rarity"] = rarity
+            params["category"] = category
+            params["sort_by"] = sort_by or "lowest_price"
+            params["limit"] = limit
+            if min_float is not None:
+                params["min_float"] = min_float
+            if max_float is not None:
+                params["max_float"] = max_float
+            if paint_seed is not None:
+                params["paint_seed"] = paint_seed
+            if min_fade is not None:
+                params["min_fade"] = min_fade
+            if max_fade is not None:
+                params["max_fade"] = max_fade
+            if min_blue is not None:
+                params["min_blue"] = min_blue
+            if max_blue is not None:
+                params["max_blue"] = max_blue
+        elif keychain_index:
+            params["keychain_index"] = keychain_index
+            params["sort_by"] = sort_by or "lowest_price"
+            params["limit"] = limit
+            if min_keychain_pattern is not None:
+                params["min_keychain_pattern"] = min_keychain_pattern
+            if max_keychain_pattern is not None:
+                params["max_keychain_pattern"] = max_keychain_pattern
+        elif paint_index:
+            params["def_index"] = def_index
+            params["paint_index"] = paint_index
+            params["category"] = category
+            params["limit"] = limit
+            if sort_by:
+                params["sort_by"] = sort_by
+            if min_float is not None:
+                params["min_float"] = min_float
+            if max_float is not None:
+                params["max_float"] = max_float
+            if paint_seed is not None:
+                params["paint_seed"] = paint_seed
+            if min_fade is not None:
+                params["min_fade"] = min_fade
+            if max_fade is not None:
+                params["max_fade"] = max_fade
+            if min_blue is not None:
+                params["min_blue"] = min_blue
+            if max_blue is not None:
+                params["max_blue"] = max_blue
+        elif sticker_index:
+            params["def_index"] = def_index
+            params["sticker_index"] = sticker_index
+            params["sort_by"] = sort_by or "lowest_price"
+            params["limit"] = min(limit, 40)
+        else:
+            params["def_index"] = def_index
+            params["sort_by"] = sort_by or "lowest_price"
+            params["limit"] = min(limit, 40)
+
+        if cursor:
+            params["cursor"] = cursor
+
+        url = f"{LISTINGS_URL}?{urllib.parse.urlencode(params)}"
+        headers = {"Authorization": api_key}
+        req = urllib.request.Request(url, headers=headers)
+        data = _request_json(req)
+        return data
+
+    try:
+        return _retry_request(_get)
+    except (urllib.error.HTTPError, urllib.error.URLError) as e:
+        logging.error(f"get_item_listings error: {e}")
+        return None
+
+
+def get_item_sales(api_key, market_hash_name):
+    """Получает историю продаж предмета."""
+    def _get():
+        encoded = urllib.parse.quote(market_hash_name, safe="")
+        url = API_HISTORY_SALES.format(market_hash_name=encoded)
+        headers = {"Authorization": api_key}
+        req = urllib.request.Request(url, headers=headers)
+        data = _request_json(req)
+        return data
+
+    try:
+        return _retry_request(_get)
+    except (urllib.error.HTTPError, urllib.error.URLError) as e:
+        logging.error(f"get_item_sales error: {e}")
+        return None
+
+
+def get_item_buy_orders(api_key, inspect_link=None, market_hash_name=None, limit=5):
+    """Получает buy orders для предмета."""
+    def _get():
+        headers = {"Authorization": api_key}
+
+        if inspect_link:
+            params = {"url": inspect_link, "limit": limit}
+            url = f"{API_BUY_ORDERS_ITEM}?{urllib.parse.urlencode(params)}"
+            req = urllib.request.Request(url, headers=headers)
+        else:
+            # POST для предметов без inspect_link
+            headers["Content-Type"] = "application/json"
+            payload = {"market_hash_name": market_hash_name}
+            url = f"{API_BUY_ORDERS_SIMILAR}?limit={limit}"
+            req = urllib.request.Request(
+                url, data=_dumps(payload), headers=headers, method="POST",
+            )
+
+        data = _request_json(req)
+        return data
+
+    try:
+        return _retry_request(_get)
+    except (urllib.error.HTTPError, urllib.error.URLError) as e:
+        logging.error(f"get_item_buy_orders error: {e}")
+        return None
+
+
+def get_item_graph(api_key, market_hash_name):
+    """Получает график цен предмета."""
+    def _get():
+        encoded = urllib.parse.quote(market_hash_name, safe="")
+        url = API_HISTORY_GRAPH.format(market_hash_name=encoded)
+        headers = {"Authorization": api_key}
+        req = urllib.request.Request(url, headers=headers)
+        data = _request_json(req)
+        return data
+
+    try:
+        return _retry_request(_get)
+    except (urllib.error.HTTPError, urllib.error.URLError) as e:
+        logging.error(f"get_item_graph error: {e}")
         return None

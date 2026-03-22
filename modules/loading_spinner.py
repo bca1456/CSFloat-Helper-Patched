@@ -55,7 +55,7 @@ class LoadingSpinner(QWidget):
 
 
 class LoadingOverlay(QWidget):
-    """Полупрозрачный оверлей со спиннером по центру виджета."""
+    """Полупрозрачный оверлей со спиннером и текстом по центру виджета."""
 
     def __init__(self, parent=None, text=""):
         super().__init__(parent)
@@ -64,7 +64,7 @@ class LoadingOverlay(QWidget):
         self._text = text
         self._spinner = LoadingSpinner(self, size=40, line_width=3)
         self._bg_color = QColor(Theme.BG_WHITE)
-        self._bg_color.setAlpha(180)
+        self._bg_color.setAlpha(200)
         self._text_color = QColor(Theme.TEXT_SECONDARY)
 
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
@@ -90,7 +90,9 @@ class LoadingOverlay(QWidget):
         if self.parent():
             self.setGeometry(self.parent().rect())
         cx = self.width() // 2 - self._spinner.width() // 2
-        cy = self.height() // 2 - self._spinner.height() // 2 - 10
+        text_height = 20 if self._text else 0
+        total_h = self._spinner.height() + text_height
+        cy = (self.height() - total_h) // 2
         self._spinner.move(cx, cy)
 
     def resizeEvent(self, event):
@@ -107,9 +109,10 @@ class LoadingOverlay(QWidget):
 
             painter.setPen(self._text_color)
             painter.setFont(QFont(Theme.FONT_FAMILY, Theme.FONT_SIZE_SMALL))
-            text_y = self.height() // 2 + self._spinner.height() // 2 + 4
+            text_y = self._spinner.y() + self._spinner.height() + 6
+            text_rect = QRectF(0, text_y, self.width(), 20)
             painter.drawText(
-                self.rect().adjusted(0, text_y - self.height() // 2, 0, 0),
+                text_rect,
                 Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
                 self._text,
             )

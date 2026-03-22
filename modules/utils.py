@@ -241,6 +241,28 @@ def cache_image_async(url: str, callback=None):
     imageloader_pool.submit(download)
 
 
+def days_ago(iso_str):
+    try:
+        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        delta = datetime.now(timezone.utc) - dt
+        d, h = delta.days, delta.seconds // 3600
+        return f"{h}h" if d == 0 else f"{d}d"
+    except Exception:
+        return ""
+
+
+def cents_to_dollars(cents):
+    return f"${cents / 100:.2f}"
+
+
+def format_date(iso_str):
+    try:
+        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        return dt.strftime("%b %d, %Y")
+    except Exception:
+        return ""
+
+
 def calculate_days_on_sale(created_at: str) -> str:
     """Вычисляет количество дней и часов с момента выставления на продажу."""
     try:

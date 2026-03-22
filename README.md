@@ -55,6 +55,22 @@ If you prefer to use a bat file for quick launch on Windows, you can use the run
 
 -   **Inventory**: The script loads data about the inventory and items listed for sale via the CSFloat API.
 
+### Item Info
+
+- Detailed item dialog with current listings, recent sales, buy orders and price history chart
+- Float, seed, sticker filters with scroll pagination
+- Price statistics with scoring indicators (7d / 30d / 90d)
+- Collection comparison panel
+
+![Item Info](screenshot/Screenshot_Item_Info.png)
+
+### Additional Features
+
+- View user information (Steam ID, balance, sales statistics)
+- Keep Online — automatically maintain online status
+- Light/Dark theme switching
+- Image caching for fast loading
+
 ### Data Display
 
 -   **Inventory Table**: The application displays the user's inventory in a table with information about the item name, stickers, float value, days listed for sale, price.
