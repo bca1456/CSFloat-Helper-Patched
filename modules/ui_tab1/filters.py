@@ -2,7 +2,7 @@
 
 from PyQt6.QtCore import QObject, Qt, pyqtSlot
 from modules.models.columns import (
-    COL_NAME, COL_FLOAT, COL_RARITY, COL_WEAR, COL_STICKERS, COL_COLLECTION,
+    COL_NAME, COL_CSFLOAT_LOGIN, COL_FLOAT, COL_RARITY, COL_WEAR, COL_STICKERS, COL_COLLECTION,
 )
 
 
@@ -74,6 +74,8 @@ class FilterController(QObject):
         for row in range(self.table.rowCount()):
             name_item = self.table.item(row, COL_NAME)
             name_txt = (name_item.text().lower() if name_item else "")
+            login_item = self.table.item(row, COL_CSFLOAT_LOGIN)
+            login_txt = (login_item.text().lower() if login_item else "")
 
             float_item = self.table.item(row, COL_FLOAT)
             float_txt = float_item.text() if float_item else ""
@@ -92,7 +94,7 @@ class FilterController(QObject):
                 if sticker_data:
                     sticker_names = " ".join(s["name"].lower() for s in sticker_data)
 
-            matches_name = name_filter in name_txt
+            matches_name = name_filter in name_txt or name_filter in login_txt
             matches_sticker = sticker_filter in sticker_names
             matches_float = (
                 (min_float is None or (float_val is not None and float_val >= min_float))

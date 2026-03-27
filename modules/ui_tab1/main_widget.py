@@ -15,12 +15,13 @@ from modules.collections_manager import update_collections_from_schema, get_coll
 from modules.utils import key_id, migrate_settings, shutdown_image_pool
 from .constants import refresh_collections
 from modules.models.columns import (
-    COL_NAME, COL_STICKERS, COL_KEYCHAINS, COL_FLOAT, COL_SEED,
+    COL_NAME, COL_CSFLOAT_LOGIN, COL_STICKERS, COL_KEYCHAINS, COL_FLOAT, COL_SEED,
     COL_DAYS, COL_PRICE, COL_LISTING_ID, COL_ASSET_ID, COL_CREATED_AT,
     COL_PRICE_VALUE, COL_API_KEY, COL_COLLECTION, COL_RARITY, COL_WEAR,
     COL_DEF_INDEX, COL_PAINT_INDEX, COL_INSPECT_LINK, COL_ICON_URL,
     COL_STICKER_INDEX, COL_KEYCHAIN_INDEX,
     DEFAULT_COLUMN_WIDTHS,
+    COLUMN_LAYOUT_VERSION,
 )
 from modules.models.inventory_store import InventoryStore
 from .custom_widgets import CustomToolTip, AccountSettingsDialog, ToggleSwitch
@@ -35,7 +36,7 @@ from .item_operations import ItemOperations
 from .delegates import PriceDelegate, IconDelegate
 
 
-def _stall_listings_to_inventory_items(stall_data, api_key):
+def _stall_listings_to_inventory_items(stall_data, api_key, csfloat_username=""):
     """Если API вернул пустой инвентарь, строим минимальные «предметы» из stall для отображения строк в таблице."""
     items = []
     for st in stall_data or []:
@@ -54,17 +55,18 @@ def _stall_listings_to_inventory_items(stall_data, api_key):
             "stickers": obj.get("stickers", []),
             "keychains": obj.get("keychains", []),
             "api_key": api_key,
+            "csfloat_username": csfloat_username or "",
         }
         items.append(item)
     return items
 
 
-def _merge_missing_stall_items(account_inventory, stall_data, api_key):
+def _merge_missing_stall_items(account_inventory, stall_data, api_key, csfloat_username=""):
     """Добавляет в инвентарь предметы из stall, которых нет в account_inventory."""
     inventory = list(account_inventory or [])
     present_asset_ids = {str(it.get("asset_id", "")) for it in inventory if it.get("asset_id") is not None}
 
-    for st_item in _stall_listings_to_inventory_items(stall_data, api_key):
+    for st_item in _stall_listings_to_inventory_items(stall_data, api_key, csfloat_username):
         aid = str(st_item.get("asset_id", ""))
         if aid and aid not in present_asset_ids:
             inventory.append(st_item)
@@ -94,6 +96,13 @@ def _steam_id_from_user(user_info):
         if s.startswith("7656") and s[4:].isdigit():
             return s
     return None
+
+
+def _csfloat_username_for_api_key(store, api_key):
+    for u in store.user_infos:
+        if u.get("api_key") == api_key:
+            return str(u.get("username") or "")
+    return ""
 
 
 class Tab1(QWidget):
@@ -126,6 +135,7 @@ class Tab1(QWidget):
         self.name_sort_order = Qt.SortOrder.AscendingOrder
         self.float_sort_order = Qt.SortOrder.AscendingOrder
         self.seed_sort_order = Qt.SortOrder.AscendingOrder
+        self.login_sort_order = Qt.SortOrder.AscendingOrder
 
         self.tooltip = CustomToolTip()
 
@@ -656,7 +666,8 @@ class Tab1(QWidget):
         # Если часть предметов есть в stall, но отсутствует в API inventory — добавляем их в таблицу из stall.
         # Это покрывает кейс «в UI CSFloat предмет листится, а /me/inventory его ещё не отдаёт».
         before_count = len(account_inventory or [])
-        account_inventory = _merge_missing_stall_items(account_inventory, stall_data, api_key)
+        uname = _csfloat_username_for_api_key(self.store, api_key)
+        account_inventory = _merge_missing_stall_items(account_inventory, stall_data, api_key, uname)
         added_from_stall = len(account_inventory) - before_count
         if added_from_stall > 0:
             logging.debug("Account %s: added %s stall-only rows to table", kid, added_from_stall)
@@ -730,6 +741,15 @@ class Tab1(QWidget):
             self.filter_ctrl.last_sorted_column = COL_NAME
             self.filter_ctrl.last_sort_order = self.name_sort_order
 
+        elif logical_index == COL_CSFLOAT_LOGIN:
+            self.login_sort_order = (
+                Qt.SortOrder.DescendingOrder if self.login_sort_order == Qt.SortOrder.AscendingOrder
+                else Qt.SortOrder.AscendingOrder
+            )
+            self.inventory_table.sortItems(COL_CSFLOAT_LOGIN, self.login_sort_order)
+            self.filter_ctrl.last_sorted_column = COL_CSFLOAT_LOGIN
+            self.filter_ctrl.last_sort_order = self.login_sort_order
+
         elif logical_index == COL_FLOAT:
             self.float_sort_order = (
                 Qt.SortOrder.DescendingOrder if self.float_sort_order == Qt.SortOrder.AscendingOrder
@@ -767,6 +787,13 @@ class Tab1(QWidget):
             self.filter_ctrl.last_sort_order = self.days_sort_order
 
     def load_column_widths(self):
+        stored_ver = self.settings.value("tab1_column_layout_version", 0, type=int)
+        if stored_ver != COLUMN_LAYOUT_VERSION:
+            for i in range(self.inventory_table.columnCount()):
+                self.inventory_table.setColumnWidth(i, DEFAULT_COLUMN_WIDTHS.get(i, 0))
+            self.settings.setValue("tab1_column_layout_version", COLUMN_LAYOUT_VERSION)
+            self.save_column_widths()
+            return
         for i in range(self.inventory_table.columnCount()):
             key = f"tab1_column_width_{i}"
             if self.settings.contains(key):

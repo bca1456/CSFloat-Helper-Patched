@@ -26,8 +26,12 @@ class InventoryStore(QObject):
             self.user_infos.append(user_info)
 
         if inventory:
+            uname = ""
+            if user_info:
+                uname = str(user_info.get("username") or "")
             for it in inventory:
                 it["api_key"] = api_key
+                it["csfloat_username"] = uname
             self.inventory.extend(inventory)
 
     def add_stall_result(self, stall_data):

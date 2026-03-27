@@ -8,7 +8,7 @@ from PyQt6.QtGui import QPixmap, QIcon, QColor, QBrush, QPainter
 from PyQt6.QtCore import Qt, QTimer
 from modules.utils import cache_image_async, calculate_days_on_sale
 from modules.models.columns import (
-    COL_NAME, COL_STICKERS, COL_KEYCHAINS, COL_FLOAT, COL_SEED,
+    COL_NAME, COL_CSFLOAT_LOGIN, COL_STICKERS, COL_KEYCHAINS, COL_FLOAT, COL_SEED,
     COL_DAYS, COL_PRICE, COL_LISTING_ID, COL_ASSET_ID, COL_CREATED_AT,
     COL_PRICE_VALUE, COL_API_KEY, COL_COLLECTION, COL_RARITY, COL_WEAR,
     COL_DEF_INDEX, COL_PAINT_INDEX, COL_INSPECT_LINK, COL_ICON_URL,
@@ -139,6 +139,11 @@ class TablePopulator:
         name_item.setIcon(color_icon)
         name_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
         self.table.setItem(row, COL_NAME, name_item)
+
+        login_txt = str(item.get("csfloat_username") or "")
+        login_item = QTableWidgetItem(login_txt)
+        login_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+        self.table.setItem(row, COL_CSFLOAT_LOGIN, login_item)
 
         self._populate_stickers(row, item)
         self._populate_keychains(row, item)

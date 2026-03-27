@@ -249,7 +249,7 @@ def create_inventory_table(parent, icon_path, on_header_click_fn):
     table.horizontalHeader().setSortIndicatorShown(True)
 
     for i in range(COLUMN_COUNT):
-        if i < 7:
+        if i < 8:
             table.horizontalHeader().setSectionResizeMode(i, QHeaderView.ResizeMode.Interactive)
         else:
             table.horizontalHeader().setSectionResizeMode(i, QHeaderView.ResizeMode.Fixed)
@@ -258,7 +258,7 @@ def create_inventory_table(parent, icon_path, on_header_click_fn):
         table.setColumnHidden(col, True)
 
     table.horizontalHeader().sectionClicked.connect(on_header_click_fn)
-    table.setFixedWidth(840)
+    table.setFixedWidth(1016)
     table.setMinimumHeight(620)
     table.move(20, 132)
     table.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
