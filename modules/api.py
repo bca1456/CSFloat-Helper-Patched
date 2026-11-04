@@ -512,6 +512,13 @@ def get_item_listings(api_key, def_index, paint_index=None, sticker_index=None,
                       min_keychain_pattern=None, max_keychain_pattern=None,
                       sort_by=None, collection=None, rarity=None):
     """Получает текущие листинги предмета."""
+    if paint_index == "":
+        paint_index = None
+    if sticker_index == "":
+        sticker_index = None
+    if keychain_index == "":
+        keychain_index = None
+
     def _get():
         params = {"type": "buy_now"}
 
@@ -543,7 +550,7 @@ def get_item_listings(api_key, def_index, paint_index=None, sticker_index=None,
                 params["min_keychain_pattern"] = min_keychain_pattern
             if max_keychain_pattern is not None:
                 params["max_keychain_pattern"] = max_keychain_pattern
-        elif paint_index:
+        elif paint_index is not None:
             params["def_index"] = def_index
             params["paint_index"] = paint_index
             params["category"] = category

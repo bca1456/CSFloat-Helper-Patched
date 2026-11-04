@@ -185,7 +185,7 @@ def change_icon_color(icon_path, color_hex):
 def create_action_buttons(parent, icon_path, callbacks):
     """Создаёт кнопки действий и поле ввода цены.
 
-    callbacks — dict с ключами: sell, change_price, delist, swap, user_info
+    callbacks — dict с ключами: sell, change_price, delist, swap, undercut, user_info
     """
     price_input = QLineEdit(parent)
     price_input.setPlaceholderText("Price")
@@ -194,15 +194,16 @@ def create_action_buttons(parent, icon_path, callbacks):
     price_input.setStyleSheet(Theme.input_style())
 
     button_configs = [
-        ("sell.png", 537, "Sell", callbacks["sell"]),
-        ("change.png", 597, "Change price", callbacks["change_price"]),
-        ("delist.png", 657, "Delist", callbacks["delist"]),
-        ("swap.png", 717, "Relist", callbacks["swap"]),
-        ("info.png", 777, "User info", callbacks["user_info"]),
+        ("sell.png", 537, "Sell", callbacks["sell"], "sell"),
+        ("change.png", 597, "Change price", callbacks["change_price"], "change_price"),
+        ("delist.png", 657, "Delist", callbacks["delist"], "delist"),
+        ("swap.png", 717, "Relist", callbacks["swap"], "relist"),
+        ("info.png", 777, "User info", callbacks["user_info"], "user_info"),
+        ("arrow.png", 837, "Undercut $0.01", callbacks["undercut"], "undercut"),
     ]
 
     buttons = {}
-    for icon_name, x_pos, tooltip, callback in button_configs:
+    for icon_name, x_pos, tooltip, callback, key in button_configs:
         btn = AnimatedButtonCombo(parent)
         
         full_icon_path = os.path.join(icon_path, icon_name)
@@ -213,11 +214,12 @@ def create_action_buttons(parent, icon_path, callbacks):
         btn.setFixedSize(50, 50)
         btn.move(x_pos, 20)
         btn.setStyleSheet(Theme.button_icon())
+        btn.setToolTip(tooltip)
         btn.clicked.connect(callback)
         btn.tooltip_text = tooltip
         btn.setMouseTracking(True)
         btn.installEventFilter(parent)
-        buttons[tooltip.lower().replace(" ", "_")] = btn
+        buttons[key] = btn
 
     return price_input, buttons
 

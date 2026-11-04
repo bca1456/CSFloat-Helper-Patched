@@ -226,6 +226,7 @@ class Tab1(QWidget):
                 "change_price": self.change_item_price,
                 "delist": self.delist_items,
                 "swap": self.swap_items,
+                "undercut": self.undercut_items,
                 "user_info": self.show_user_info,
             },
         )
@@ -427,6 +428,7 @@ class Tab1(QWidget):
             "change_price": "change.png",
             "delist": "delist.png",
             "relist": "swap.png",
+            "undercut": "arrow.png",
             "user_info": "info.png",
         }
         for key, btn in self.action_buttons.items():
@@ -758,6 +760,9 @@ class Tab1(QWidget):
 
     def swap_items(self):
         self.ops.swap_items()
+
+    def undercut_items(self):
+        self.ops.undercut_items()
 
     def show_user_info(self):
         self.ops.show_user_info()
