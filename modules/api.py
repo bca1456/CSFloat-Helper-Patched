@@ -50,7 +50,7 @@ MAX_RETRIES = 3
 RETRY_DELAY = 1.0  # секунды
 
 # Purchase history cache
-_PURCHASES_CACHE_VERSION = 1
+_PURCHASES_CACHE_VERSION = 2
 _PURCHASES_CACHE_TTL = 30 * 60  # 30 минут
 _PURCHASES_INCREMENTAL_OVERLAP = 14 * 24 * 60 * 60  # 14 дней
 _PURCHASES_MAX_PAGES = 5
@@ -300,6 +300,51 @@ def _save_purchases_cache(cache):
             pass
 
 
+def _norm_value(value):
+    return "" if value is None else str(value)
+
+
+def purchase_item_key(item):
+    """Стабильный ключ предмета для сопоставления покупок с инвентарём.
+
+    Steam asset_id меняется после трейда, поэтому используем характеристики предмета.
+    """
+    name = _norm_value(item.get("market_hash_name"))
+    float_value = item.get("float_value")
+    if float_value is not None:
+        try:
+            float_value = round(float(float_value), 12)
+        except (TypeError, ValueError):
+            float_value = None
+
+    if float_value is not None:
+        return "|".join([
+            "float",
+            name,
+            f"{float_value:.12f}",
+            _norm_value(item.get("paint_seed")),
+            _norm_value(item.get("paint_index")),
+            _norm_value(item.get("def_index")),
+        ])
+
+    return "|".join([
+        "name",
+        name,
+        _norm_value(item.get("keychain_pattern")),
+        _norm_value(item.get("sticker_index")),
+    ])
+
+
+def _merge_purchases(base, new):
+    """Объединяет покупки, оставляя более свежую запись для одинаковых предметов."""
+    result = dict(base or {})
+    for key, info in (new or {}).items():
+        old = result.get(key)
+        if old is None or str(info.get("purchased_at") or "") >= str(old.get("purchased_at") or ""):
+            result[key] = info
+    return result
+
+
 def _fetch_purchases(api_key, cutoff=None, max_pages=_PURCHASES_MAX_PAGES,
                      limit=_PURCHASES_PAGE_LIMIT):
     """Загружает покупки, останавливаясь при выходе за cutoff (инкрементально)."""
@@ -340,11 +385,10 @@ def _fetch_purchases(api_key, cutoff=None, max_pages=_PURCHASES_MAX_PAGES,
 
             contract = trade.get("contract") or {}
             item = contract.get("item") or {}
-            asset_id = item.get("asset_id")
-            if asset_id is None:
+            if not item.get("market_hash_name"):
                 continue
 
-            purchases[str(asset_id)] = {
+            info = {
                 "price": int(contract.get("price") or 0),
                 "purchased_at": (
                     trade.get("verified_at")
@@ -353,7 +397,15 @@ def _fetch_purchases(api_key, cutoff=None, max_pages=_PURCHASES_MAX_PAGES,
                     or trade.get("created_at")
                     or ""
                 ),
+                "market_hash_name": item.get("market_hash_name", ""),
+                "float_value": item.get("float_value"),
+                "paint_seed": item.get("paint_seed"),
+                "paint_index": item.get("paint_index"),
+                "def_index": item.get("def_index"),
+                "keychain_pattern": item.get("keychain_pattern"),
+                "sticker_index": item.get("sticker_index"),
             }
+            purchases = _merge_purchases(purchases, {purchase_item_key(info): info})
 
         collected += len(trades)
         if cutoff is not None and oldest is not None and oldest < cutoff:
@@ -367,7 +419,7 @@ def _fetch_purchases(api_key, cutoff=None, max_pages=_PURCHASES_MAX_PAGES,
 
 
 def get_purchased_assets(api_key: str, force_refresh: bool = False):
-    """Возвращает {asset_id: {price, purchased_at}} с кэшированием и инкрементальной догрузкой."""
+    """Возвращает {item_key: {price, purchased_at}} с кэшированием и инкрементальной догрузкой."""
     cache_key = _purchases_cache_key(api_key)
     now = time.time()
 
@@ -392,15 +444,13 @@ def get_purchased_assets(api_key: str, force_refresh: bool = False):
         logging.error("get_purchased_assets error: %s", e)
         return cached
 
-    merged = dict(cached)
-    merged.update(fetched)
+    merged = _merge_purchases(cached, fetched)
 
     with _PURCHASES_CACHE_LOCK:
         cache = _load_purchases_cache()
         accounts = cache.setdefault("accounts", {})
         entry = accounts.get(cache_key) or {}
-        purchases = dict(entry.get("purchases") or {})
-        purchases.update(merged)
+        purchases = _merge_purchases(entry.get("purchases") or {}, merged)
         accounts[cache_key] = {
             "last_sync": now,
             "purchases": purchases,

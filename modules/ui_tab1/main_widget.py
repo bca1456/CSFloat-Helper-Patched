@@ -10,7 +10,7 @@ from PyQt6.QtCore import Qt, QSettings, pyqtSignal, pyqtSlot, QEvent, QThreadPoo
 from modules.theme import Theme
 from modules.api import (
     get_user_info, get_inventory_data, get_stall_data, get_schema,
-    get_purchased_assets,
+    get_purchased_assets, purchase_item_key,
 )
 from modules.workers import ApiWorker, KeepOnlineWorker
 from modules.loading_spinner import LoadingOverlay
@@ -57,6 +57,13 @@ def _stall_listings_to_inventory_items(stall_data, api_key, csfloat_username="")
             "collection": obj.get("collection", ""),
             "stickers": obj.get("stickers", []),
             "keychains": obj.get("keychains", []),
+            "def_index": obj.get("def_index"),
+            "paint_index": obj.get("paint_index"),
+            "sticker_index": obj.get("sticker_index"),
+            "keychain_index": obj.get("keychain_index"),
+            "keychain_pattern": obj.get("keychain_pattern"),
+            "inspect_link": obj.get("inspect_link", ""),
+            "icon_url": obj.get("icon_url", ""),
             "api_key": api_key,
             "csfloat_username": csfloat_username or "",
         }
@@ -109,12 +116,11 @@ def _csfloat_username_for_api_key(store, api_key):
 
 
 def _apply_purchase_info(items, purchases):
-    """Проставляет предметам информацию о покупке на CSFloat по asset_id."""
+    """Проставляет предметам информацию о покупке на CSFloat по стабильному ключу."""
     if not purchases:
         return items
     for item in items:
-        asset_id = str(item.get("asset_id") or "")
-        info = purchases.get(asset_id)
+        info = purchases.get(purchase_item_key(item))
         if info:
             item["bought_on_csfloat"] = info
     return items
