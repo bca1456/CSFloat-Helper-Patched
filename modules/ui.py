@@ -41,7 +41,7 @@ class SteamInventoryApp(QMainWindow):
             | Qt.WindowType.WindowTitleHint
             | Qt.WindowType.WindowCloseButtonHint
         )
-        fixed_width = 1056
+        fixed_width = 1120
         fixed_height = 782
         self.setFixedWidth(fixed_width)
         self.setMinimumHeight(fixed_height)

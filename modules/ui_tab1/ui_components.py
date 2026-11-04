@@ -258,7 +258,7 @@ def create_inventory_table(parent, icon_path, on_header_click_fn):
         table.setColumnHidden(col, True)
 
     table.horizontalHeader().sectionClicked.connect(on_header_click_fn)
-    table.setFixedWidth(1016)
+    table.setFixedWidth(1080)
     table.setMinimumHeight(620)
     table.move(20, 132)
     table.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
