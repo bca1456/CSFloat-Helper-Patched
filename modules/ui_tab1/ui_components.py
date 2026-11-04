@@ -9,7 +9,7 @@ from PyQt6.QtCore import Qt, QSize
 
 from modules.theme import Theme
 from modules.models.columns import (
-    COL_KEYCHAINS, COLUMN_COUNT, COLUMN_HEADERS, HIDDEN_COLUMNS,
+    COL_KEYCHAINS, COL_BOUGHT, COLUMN_COUNT, COLUMN_HEADERS, HIDDEN_COLUMNS,
 )
 from .constants import RARITY_COLOR_MAP, get_cached_collections, WEAR_CONDITIONS_MAP
 from .animated_buttons import AnimatedButtonCombo
@@ -249,7 +249,7 @@ def create_inventory_table(parent, icon_path, on_header_click_fn):
     table.horizontalHeader().setSortIndicatorShown(True)
 
     for i in range(COLUMN_COUNT):
-        if i < 8:
+        if i < 8 or i == COL_BOUGHT:
             table.horizontalHeader().setSectionResizeMode(i, QHeaderView.ResizeMode.Interactive)
         else:
             table.horizontalHeader().setSectionResizeMode(i, QHeaderView.ResizeMode.Fixed)

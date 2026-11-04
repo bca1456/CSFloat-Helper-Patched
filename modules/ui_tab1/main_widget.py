@@ -8,7 +8,10 @@ from PyQt6.QtGui import QIcon
 from PyQt6.QtCore import Qt, QSettings, pyqtSignal, pyqtSlot, QEvent, QThreadPool
 
 from modules.theme import Theme
-from modules.api import get_user_info, get_inventory_data, get_stall_data, get_schema
+from modules.api import (
+    get_user_info, get_inventory_data, get_stall_data, get_schema,
+    get_purchased_assets,
+)
 from modules.workers import ApiWorker, KeepOnlineWorker
 from modules.loading_spinner import LoadingOverlay
 from modules.collections_manager import update_collections_from_schema, get_collections, needs_update
@@ -19,7 +22,7 @@ from modules.models.columns import (
     COL_DAYS, COL_PRICE, COL_LISTING_ID, COL_ASSET_ID, COL_CREATED_AT,
     COL_PRICE_VALUE, COL_API_KEY, COL_COLLECTION, COL_RARITY, COL_WEAR,
     COL_DEF_INDEX, COL_PAINT_INDEX, COL_INSPECT_LINK, COL_ICON_URL,
-    COL_STICKER_INDEX, COL_KEYCHAIN_INDEX,
+    COL_STICKER_INDEX, COL_KEYCHAIN_INDEX, COL_BOUGHT,
     DEFAULT_COLUMN_WIDTHS,
     COLUMN_LAYOUT_VERSION,
 )
@@ -105,6 +108,18 @@ def _csfloat_username_for_api_key(store, api_key):
     return ""
 
 
+def _apply_purchase_info(items, purchases):
+    """Проставляет предметам информацию о покупке на CSFloat по asset_id."""
+    if not purchases:
+        return items
+    for item in items:
+        asset_id = str(item.get("asset_id") or "")
+        info = purchases.get(asset_id)
+        if info:
+            item["bought_on_csfloat"] = info
+    return items
+
+
 class Tab1(QWidget):
     apikey_changed = pyqtSignal(str)
 
@@ -136,6 +151,7 @@ class Tab1(QWidget):
         self.float_sort_order = Qt.SortOrder.AscendingOrder
         self.seed_sort_order = Qt.SortOrder.AscendingOrder
         self.login_sort_order = Qt.SortOrder.AscendingOrder
+        self.bought_sort_order = Qt.SortOrder.AscendingOrder
 
         self.tooltip = CustomToolTip()
 
@@ -516,19 +532,21 @@ class Tab1(QWidget):
         self.collection_edit.setCompleter(completer)
 
     def fetch_all_data(self, api_key, steam_id):
-        """Fetch user info, inventory and stall in parallel (cached steam_id)."""
+        """Fetch user info, inventory, stall and purchases in parallel (cached steam_id)."""
         from concurrent.futures import ThreadPoolExecutor
 
-        with ThreadPoolExecutor(max_workers=3) as pool:
+        with ThreadPoolExecutor(max_workers=4) as pool:
             user_future = pool.submit(get_user_info, api_key)
             inv_future = pool.submit(get_inventory_data, api_key)
             stall_future = pool.submit(get_stall_data, api_key, steam_id)
+            purchases_future = pool.submit(get_purchased_assets, api_key)
 
             return {
                 "api_key": api_key,
                 "user_info": user_future.result(),
                 "inventory": inv_future.result(),
                 "stall": stall_future.result() or [],
+                "purchases": purchases_future.result() or {},
             }
 
     def fetch_user_and_inventory(self, api_key):
@@ -550,7 +568,10 @@ class Tab1(QWidget):
         user_info = result.get("user_info")
         inventory = result.get("inventory")
         stall_data = result.get("stall", [])
+        purchases = result.get("purchases") or {}
 
+        inventory = _apply_purchase_info(inventory or [], purchases)
+        self.store.purchases[api_key] = purchases
         self.store.add_user_result(api_key, user_info, inventory)
         self.store.add_stall_result(stall_data)
 
@@ -638,8 +659,15 @@ class Tab1(QWidget):
         return {"api_key": api_key, "stall": stall_data or []}
 
     def _fetch_stall_with_inventory(self, api_key, steam_id, account_inventory):
-        """Загружает stall и возвращает результат вместе с переданным инвентарём (для однозначного сопоставления)."""
-        result = self.fetch_stall_data(api_key, steam_id)
+        """Загружает stall и историю покупок параллельно, возвращая результат вместе с инвентарём."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            stall_future = pool.submit(self.fetch_stall_data, api_key, steam_id)
+            purchases_future = pool.submit(get_purchased_assets, api_key)
+            result = stall_future.result()
+            result["purchases"] = purchases_future.result() or {}
+
         result["inventory"] = account_inventory
         return result
 
@@ -648,6 +676,7 @@ class Tab1(QWidget):
         api_key = result.get("api_key")
         stall_data = result.get("stall", [])
         account_inventory = result.get("inventory")  # передан в _fetch_stall_with_inventory
+        purchases = result.get("purchases") or {}
 
         kid = key_id(api_key)[:8] if api_key else "?"
         logging.debug("Stall (async done): account %s, stall_items=%s", kid, len(stall_data))
@@ -658,6 +687,8 @@ class Tab1(QWidget):
             self._check_loading_complete()
             return
 
+        if api_key:
+            self.store.purchases[api_key] = purchases
         self.store.add_stall_result(stall_data)
 
         if account_inventory is None:
@@ -672,6 +703,9 @@ class Tab1(QWidget):
         if added_from_stall > 0:
             logging.debug("Account %s: added %s stall-only rows to table", kid, added_from_stall)
 
+        purchases = self.store.purchases.get(api_key, {})
+        account_inventory = _apply_purchase_info(account_inventory, purchases)
+
         self.populator.append(account_inventory, stall_data)
         self._update_status_label()
 
@@ -683,6 +717,7 @@ class Tab1(QWidget):
         self.store.add_stall_result([])
         if api_key:
             account_inventory = inventory if inventory is not None else [item for item in self.store.inventory if item.get("api_key") == api_key]
+            account_inventory = _apply_purchase_info(account_inventory, self.store.purchases.get(api_key, {}))
             self.populator.append(account_inventory, [])
         self._check_loading_complete()
 
@@ -785,6 +820,15 @@ class Tab1(QWidget):
             self.inventory_table.sortItems(COL_CREATED_AT, self.days_sort_order)
             self.filter_ctrl.last_sorted_column = COL_CREATED_AT
             self.filter_ctrl.last_sort_order = self.days_sort_order
+
+        elif logical_index == COL_BOUGHT:
+            self.bought_sort_order = (
+                Qt.SortOrder.DescendingOrder if self.bought_sort_order == Qt.SortOrder.AscendingOrder
+                else Qt.SortOrder.AscendingOrder
+            )
+            self.inventory_table.sortItems(COL_BOUGHT, self.bought_sort_order)
+            self.filter_ctrl.last_sorted_column = COL_BOUGHT
+            self.filter_ctrl.last_sort_order = self.bought_sort_order
 
     def load_column_widths(self):
         stored_ver = self.settings.value("tab1_column_layout_version", 0, type=int)

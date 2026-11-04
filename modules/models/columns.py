@@ -22,11 +22,12 @@ COL_INSPECT_LINK = 18
 COL_ICON_URL = 19
 COL_STICKER_INDEX = 20
 COL_KEYCHAIN_INDEX = 21
+COL_BOUGHT = 22
 
-COLUMN_COUNT = 22
+COLUMN_COUNT = 23
 
 # Увеличивайте при изменении DEFAULT_COLUMN_WIDTHS, чтобы сбросить сохранённые в QSettings ширины.
-COLUMN_LAYOUT_VERSION = 1
+COLUMN_LAYOUT_VERSION = 2
 
 HIDDEN_COLUMNS = [
     COL_LISTING_ID, COL_ASSET_ID, COL_CREATED_AT,
@@ -37,9 +38,9 @@ HIDDEN_COLUMNS = [
 ]
 
 DEFAULT_COLUMN_WIDTHS = {
-    0: 320, 1: 72, 2: 200, 3: 27, 4: 168, 5: 37, 6: 60, 7: 83,
+    0: 290, 1: 70, 2: 180, 3: 27, 4: 155, 5: 35, 6: 58, 7: 80,
     8: 0, 9: 0, 10: 0, 11: 0, 12: 0, 13: 0, 14: 0, 15: 0,
-    16: 0, 17: 0, 18: 0, 19: 0, 20: 0, 21: 0,
+    16: 0, 17: 0, 18: 0, 19: 0, 20: 0, 21: 0, 22: 110,
 }
 
 COLUMN_HEADERS = [
@@ -47,5 +48,5 @@ COLUMN_HEADERS = [
     "Price", "Listing ID", "Asset ID", "Created At", "Price Value",
     "API Key", "Collection", "Rarity", "Wear Condition",
     "Def Index", "Paint Index", "Inspect Link", "Icon URL", "Sticker Index",
-    "Keychain Index",
+    "Keychain Index", "Bought on CSFloat",
 ]

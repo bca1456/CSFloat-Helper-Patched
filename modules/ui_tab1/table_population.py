@@ -12,7 +12,7 @@ from modules.models.columns import (
     COL_DAYS, COL_PRICE, COL_LISTING_ID, COL_ASSET_ID, COL_CREATED_AT,
     COL_PRICE_VALUE, COL_API_KEY, COL_COLLECTION, COL_RARITY, COL_WEAR,
     COL_DEF_INDEX, COL_PAINT_INDEX, COL_INSPECT_LINK, COL_ICON_URL,
-    COL_STICKER_INDEX, COL_KEYCHAIN_INDEX,
+    COL_STICKER_INDEX, COL_KEYCHAIN_INDEX, COL_BOUGHT,
 )
 from .constants import RARITY_COLOR_MAP
 
@@ -145,6 +145,8 @@ class TablePopulator:
         login_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
         self.table.setItem(row, COL_CSFLOAT_LOGIN, login_item)
 
+        self._populate_bought(row, item)
+
         self._populate_stickers(row, item)
         self._populate_keychains(row, item)
         self._populate_float(row, item)
@@ -226,6 +228,27 @@ class TablePopulator:
         if paint_seed is not None:
             seed_item.setData(Qt.ItemDataRole.UserRole, int(paint_seed))
         self.table.setItem(row, COL_SEED, seed_item)
+
+    def _populate_bought(self, row, item):
+        """Заполняет отметку о покупке на CSFloat."""
+        info = item.get("bought_on_csfloat")
+        if not info:
+            self.table.setItem(row, COL_BOUGHT, EmptyLastItem(""))
+            return
+
+        bought_item = EmptyLastItem("Yes")
+        bought_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        price = int(info.get("price") or 0)
+        purchased_at = str(info.get("purchased_at") or "")
+        lines = ["Bought on CSFloat"]
+        if price:
+            lines.append(f"Price: ${price / 100:.2f}")
+        if purchased_at:
+            lines.append(f"Date: {purchased_at[:10]}")
+        bought_item.setToolTip("\n".join(lines))
+
+        self.table.setItem(row, COL_BOUGHT, bought_item)
 
     def _populate_stall_data(self, row, stall_item):
         """Заполняет данные о продаже."""

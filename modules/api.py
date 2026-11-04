@@ -1,12 +1,15 @@
 # modules/api.py
 
 import gzip
+import hashlib
 import logging
 import os
+import threading
 import urllib.request
 import urllib.error
 import urllib.parse
 import time
+from datetime import datetime, timedelta, timezone
 
 try:
     import orjson as _json_mod
@@ -31,6 +34,7 @@ except ImportError:
 API_USER_INFO = "https://csfloat.com/api/v1/me"
 API_INVENTORY = "https://csfloat.com/api/v1/me/inventory?limit=100"
 API_STALL = "https://csfloat.com/api/v1/users/{steam_id}/stall?limit=999"
+API_TRADES = "https://csfloat.com/api/v1/me/trades"
 LISTINGS_URL = "https://csfloat.com/api/v1/listings"
 BULK_LIST_URL = "https://csfloat.com/api/v1/listings/bulk-list"
 BULK_DELIST_URL = "https://csfloat.com/api/v1/listings/bulk-delist"
@@ -44,6 +48,17 @@ API_BUY_ORDERS_SIMILAR = "https://csfloat.com/api/v1/buy-orders/similar-orders"
 # Retry settings
 MAX_RETRIES = 3
 RETRY_DELAY = 1.0  # секунды
+
+# Purchase history cache
+_PURCHASES_CACHE_VERSION = 1
+_PURCHASES_CACHE_TTL = 30 * 60  # 30 минут
+_PURCHASES_INCREMENTAL_OVERLAP = 14 * 24 * 60 * 60  # 14 дней
+_PURCHASES_MAX_PAGES = 5
+_PURCHASES_PAGE_LIMIT = 1000
+_PURCHASES_CACHE_LOCK = threading.Lock()
+
+_BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_PURCHASES_CACHE_FILE = os.path.join(_BASE_DIR, "cache", "purchases_cache.json")
 
 
 def _request_json(req: urllib.request.Request):
@@ -236,6 +251,163 @@ def get_stall_data(api_key: str, steam_id: str):
     except urllib.error.URLError as e:
         print(f"Other error occurred: {e}")
         return None
+
+
+def _purchases_cache_key(api_key: str) -> str:
+    """Короткий идентификатор аккаунта для кэша покупок."""
+    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16]
+
+
+def _parse_iso_datetime(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _load_purchases_cache():
+    try:
+        with open(_PURCHASES_CACHE_FILE, "rb") as f:
+            data = _loads(f.read())
+        if (
+            isinstance(data, dict)
+            and data.get("version") == _PURCHASES_CACHE_VERSION
+            and isinstance(data.get("accounts"), dict)
+        ):
+            return data
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        logging.warning("Failed to load purchases cache: %s", e)
+    return {"version": _PURCHASES_CACHE_VERSION, "accounts": {}}
+
+
+def _save_purchases_cache(cache):
+    tmp = f"{_PURCHASES_CACHE_FILE}.{os.getpid()}.tmp"
+    try:
+        os.makedirs(os.path.dirname(_PURCHASES_CACHE_FILE), exist_ok=True)
+        with open(tmp, "wb") as f:
+            f.write(_dumps(cache))
+        os.replace(tmp, _PURCHASES_CACHE_FILE)
+    except Exception as e:
+        logging.warning("Failed to save purchases cache: %s", e)
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+
+
+def _fetch_purchases(api_key, cutoff=None, max_pages=_PURCHASES_MAX_PAGES,
+                     limit=_PURCHASES_PAGE_LIMIT):
+    """Загружает покупки, останавливаясь при выходе за cutoff (инкрементально)."""
+    headers = {"Authorization": api_key}
+    purchases = {}
+    total = None
+    collected = 0
+    effective_limit = limit
+
+    for page in range(max_pages):
+        params = {
+            "role": "buyer",
+            "state": "verified",
+            "limit": limit,
+            "page": page,
+        }
+        url = f"{API_TRADES}?{urllib.parse.urlencode(params)}"
+        req = urllib.request.Request(url, headers=headers)
+        data = _request_json(req)
+        trades = data.get("trades") or []
+        if not trades:
+            break
+
+        if total is None:
+            total = data.get("count")
+
+        if page == 0 and len(trades) < effective_limit:
+            # Сервер может ограничивать размер страницы меньше запрошенного.
+            effective_limit = len(trades)
+
+        oldest = None
+        for trade in trades:
+            created = _parse_iso_datetime(
+                trade.get("created_at") or trade.get("verified_at")
+            )
+            if created is not None and (oldest is None or created < oldest):
+                oldest = created
+
+            contract = trade.get("contract") or {}
+            item = contract.get("item") or {}
+            asset_id = item.get("asset_id")
+            if asset_id is None:
+                continue
+
+            purchases[str(asset_id)] = {
+                "price": int(contract.get("price") or 0),
+                "purchased_at": (
+                    trade.get("verified_at")
+                    or trade.get("accepted_at")
+                    or contract.get("sold_at")
+                    or trade.get("created_at")
+                    or ""
+                ),
+            }
+
+        collected += len(trades)
+        if cutoff is not None and oldest is not None and oldest < cutoff:
+            break
+        if total is not None and collected >= int(total):
+            break
+        if len(trades) < effective_limit:
+            break
+
+    return purchases
+
+
+def get_purchased_assets(api_key: str, force_refresh: bool = False):
+    """Возвращает {asset_id: {price, purchased_at}} с кэшированием и инкрементальной догрузкой."""
+    cache_key = _purchases_cache_key(api_key)
+    now = time.time()
+
+    with _PURCHASES_CACHE_LOCK:
+        cache = _load_purchases_cache()
+        entry = cache.get("accounts", {}).get(cache_key) or {}
+        cached = dict(entry.get("purchases") or {})
+        last_sync = float(entry.get("last_sync") or 0)
+
+    if not force_refresh and last_sync and (now - last_sync) < _PURCHASES_CACHE_TTL:
+        return cached
+
+    cutoff = None
+    if last_sync:
+        cutoff = datetime.fromtimestamp(last_sync, tz=timezone.utc) - timedelta(
+            seconds=_PURCHASES_INCREMENTAL_OVERLAP
+        )
+
+    try:
+        fetched = _retry_request(_fetch_purchases, api_key, cutoff) or {}
+    except (urllib.error.HTTPError, urllib.error.URLError) as e:
+        logging.error("get_purchased_assets error: %s", e)
+        return cached
+
+    merged = dict(cached)
+    merged.update(fetched)
+
+    with _PURCHASES_CACHE_LOCK:
+        cache = _load_purchases_cache()
+        accounts = cache.setdefault("accounts", {})
+        entry = accounts.get(cache_key) or {}
+        purchases = dict(entry.get("purchases") or {})
+        purchases.update(merged)
+        accounts[cache_key] = {
+            "last_sync": now,
+            "purchases": purchases,
+        }
+        _save_purchases_cache(cache)
+
+    return merged
 
 
 def bulk_list(api_key: str, items: list):

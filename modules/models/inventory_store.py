@@ -15,6 +15,7 @@ class InventoryStore(QObject):
         self.user_infos = []
         self.inventory = []
         self.stall = []
+        self.purchases = {}
         self.account_descriptions = {}
         self.stall_loaded_count = 0
         self.stall_total_count = 0
@@ -49,5 +50,6 @@ class InventoryStore(QObject):
         self.user_infos.clear()
         self.inventory.clear()
         self.stall.clear()
+        self.purchases.clear()
         self.stall_loaded_count = 0
         self.stall_total_count = 0
